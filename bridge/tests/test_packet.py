@@ -91,6 +91,17 @@ class TestFieldContract(PacketCase):
         self.assertLessEqual(len(e["pj"]), 20)
         self.assertLessEqual(len(e["nm"]), 56)
 
+    def test_sdk_cli_sessions_excluded(self):
+        # claude -p one-shots (entrypoint "sdk-cli") never display; the
+        # interactive session ("cli") and unmarked sessions stay
+        a = self.make([user(T0)], mtime=T0, first_seen=T0)
+        a.entrypoint = "cli"
+        b = self.make([user(T0)], mtime=T0, first_seen=T0 + 1)
+        b.entrypoint = "sdk-cli"
+        c = self.make([user(T0)], mtime=T0, first_seen=T0 + 2)
+        pkt = self.build([a, b, c], now=T0 + 10)
+        self.assertEqual(len(pkt["ses"]), 2)
+
     def test_pm_badge_on_the_wire(self):
         for mode, wire in (("plan", "plan"), ("acceptEdits", "acceptEdits"),
                            ("bypassPermissions", "bypassPermissions"),

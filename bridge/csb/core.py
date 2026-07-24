@@ -30,9 +30,11 @@ def build_packet(sessions, cfg, usage, now=None, slots=None, chimer=None):
     # hook edges count as liveness/content too: an eagerly-created session
     # (UserPromptSubmit before the transcript file exists) must be visible
     # during its first turn (§c)
+    ignore_ep = set(cfg.get("ignore_entrypoints", ()))
     live = [s for s in sessions.values()
             if now - max(s.mtime(), s.hook_last) < cfg["active_window_min"] * 60
-            and (s.model or s.turn_start or s.turn_started_at)]
+            and (s.model or s.turn_start or s.turn_started_at)
+            and s.entrypoint not in ignore_ep]
     live.sort(key=lambda s: s.first_seen)
     for s in live:
         try:                       # statusline captures feed derive + packet
@@ -139,7 +141,9 @@ class BridgeCore:
             now = time.time()
         self._last_rescan = now
         cutoff = now - DISCOVERY_WINDOW_S
-        for path, mtime in find_transcripts(self.cfg["roots"]).items():
+        for path, mtime in find_transcripts(
+                self.cfg["roots"],
+                self.cfg.get("ignore_projects", ())).items():
             if mtime > cutoff and path not in self.sessions:
                 self.sessions[path] = self._session_factory(path)
         fresh_cut = now - self.cfg.get("hook_fresh_s", 900)

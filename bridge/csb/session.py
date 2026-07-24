@@ -55,6 +55,7 @@ class Session:
         self.offset = 0
         self.name = ""
         self.project = ""             # basename of the session's cwd
+        self.entrypoint = ""          # "cli" interactive, "sdk-cli" = claude -p
         self.ai_title = ""            # Claude Code's generated session title
         self.custom_title = ""        # user-set title (wins over ai_title)
         self.model = ""
@@ -159,6 +160,12 @@ class Session:
         cwd = rec.get("cwd")
         if cwd and not self.project:
             self.project = os.path.basename(cwd.rstrip("/\\")) or cwd
+
+        # print-mode / SDK sessions record entrypoint "sdk-cli" (interactive
+        # is "cli") — captured so the display can exclude one-shot probes
+        ep = rec.get("entrypoint")
+        if ep:
+            self.entrypoint = ep
 
         if rec.get("isSidechain"):
             return
@@ -455,10 +462,13 @@ class Session:
         }
 
 
-def find_transcripts(roots):
+def find_transcripts(roots, ignore=()):
     # os.walk (not glob) — transcripts live inside hidden ".claude" folders,
     # which glob's ** refuses to enter. Skip audit logs (encrypted, not
     # transcripts).
+    # `ignore`: substrings matched against the project dir basename — the
+    # self-probe loopback filter (ClaudeBar #172): sessions the tooling
+    # itself spawns in scratch dirs must not appear as fleet members.
     if isinstance(roots, str):
         # Guard for direct callers: iterating a bare string yields characters,
         # and os.path.isdir("/") is True — that walks the entire filesystem.
@@ -470,6 +480,9 @@ def find_transcripts(roots):
         for dirpath, dirs, files in os.walk(root):
             if "subagents" in dirs:
                 dirs.remove("subagents")   # helper agents aren't top-level sessions
+            base = os.path.basename(dirpath)
+            if any(p and p in base for p in ignore):
+                continue
             for fn in files:
                 # "compact" basenames are compaction artifacts, not sessions
                 if fn.endswith(".jsonl") and fn != "audit.jsonl" \

@@ -266,28 +266,31 @@ static void drawUpTri(int x, int y, uint16_t c)   { cv->fillTriangle(x, y + 8, x
 static void drawDownTri(int x, int y, uint16_t c) { cv->fillTriangle(x, y, x + 8, y, x + 4, y + 8, c); }
 
 static void drawHeader() {
-  // page dots, session indicator, attention alert
+  // On the status page the minimap owns fleet attention — the banner and
+  // session counter are clutter there. Both still serve the usage page
+  // and message screens, which have no minimap.
+  bool minimal = (page == 0 && nSes > 0);
   char buf[24];
   cv->setFont(NULL);  // built-in 6x8
   cv->setTextSize(1);
 
-  // attention banner (any session waiting)
   bool anyAttn = false; int attnIdx = -1;
-  for (int i = 0; i < nSes; i++) if (ses[i].at && i != act) { anyAttn = true; attnIdx = i; break; }
-  if (anyAttn) {
-    cv->fillRect(0, 0, CANVAS_W, 14, C_ORANGE);
-    snprintf(buf, sizeof(buf), "! session %c waiting", 'A' + ses[attnIdx].sl);
-    cv->setTextColor(C_BG);
-    cv->setCursor(6, 3);
-    cv->print(buf);
-  }
-
-  // session letter + count, top right
-  if (nSes > 0) {
-    snprintf(buf, sizeof(buf), "%c %d/%d", 'A' + ses[act].sl, act + 1, nSes);
-    cv->setTextColor(anyAttn ? C_BG : C_DIM);
-    cv->setCursor(CANVAS_W - 6 * strlen(buf) - 34, anyAttn ? 3 : 6);
-    cv->print(buf);
+  if (!minimal) {
+    for (int i = 0; i < nSes; i++)
+      if (ses[i].at && i != act) { anyAttn = true; attnIdx = i; break; }
+    if (anyAttn) {
+      cv->fillRect(0, 0, CANVAS_W, 14, C_ORANGE);
+      snprintf(buf, sizeof(buf), "! session %c waiting", 'A' + ses[attnIdx].sl);
+      cv->setTextColor(C_BG);
+      cv->setCursor(6, 3);
+      cv->print(buf);
+    }
+    if (nSes > 0) {
+      snprintf(buf, sizeof(buf), "%c %d/%d", 'A' + ses[act].sl, act + 1, nSes);
+      cv->setTextColor(anyAttn ? C_BG : C_DIM);
+      cv->setCursor(CANVAS_W - 6 * strlen(buf) - 34, anyAttn ? 3 : 6);
+      cv->print(buf);
+    }
   }
   // page dots
   int dx = CANVAS_W - 24;

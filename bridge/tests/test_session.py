@@ -249,5 +249,31 @@ class TestSubagentLiveness(SessionCase):
         self.assertEqual(s.subagent_count({"subagent_live_s": 15}, now=T0), 1)
 
 
+class IgnoreProjectsCase(unittest.TestCase):
+    """Self-probe filter: tooling-spawned scratch sessions never display."""
+
+    def test_ignore_filters_project_dirs(self):
+        with tempfile.TemporaryDirectory() as td:
+            for proj in ("-Users-u-projects-real",
+                         "-private-tmp-claude-123-abc-scratchpad",
+                         "-tmp-claude-456-def-scratchpad"):
+                d = os.path.join(td, proj)
+                os.makedirs(d)
+                with open(os.path.join(d, "s.jsonl"), "w") as f:
+                    f.write("{}\n")
+            self.assertEqual(len(find_transcripts([td])), 3)
+            kept = find_transcripts([td], ["-tmp-claude-"])
+            self.assertEqual(len(kept), 1)
+            self.assertIn("real", next(iter(kept)))
+
+    def test_empty_patterns_filter_nothing(self):
+        with tempfile.TemporaryDirectory() as td:
+            d = os.path.join(td, "-Users-u-projects-real")
+            os.makedirs(d)
+            with open(os.path.join(d, "s.jsonl"), "w") as f:
+                f.write("{}\n")
+            self.assertEqual(len(find_transcripts([td], ["", None])), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

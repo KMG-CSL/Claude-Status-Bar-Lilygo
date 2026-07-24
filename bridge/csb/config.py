@@ -60,6 +60,13 @@ def default_roots():
 
 DEFAULT_CONFIG = {
     "roots": default_roots(),
+    # self-probe filter: project-dir basename substrings to never display —
+    # sessions spawned by tooling in scratch dirs (Claude Code scratchpads
+    # live under /tmp/claude-* or /private/tmp/claude-*)
+    "ignore_projects": ["-tmp-claude-"],
+    # session entrypoints to never display: "sdk-cli" = claude -p one-shots
+    # and SDK-driven runs (interactive sessions record "cli")
+    "ignore_entrypoints": ["sdk-cli"],
     "port": "",                  # "" = auto-detect (ESP32-S3 native USB)
     "baud": 115200,
     "max_sessions": 8,

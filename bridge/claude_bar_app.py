@@ -386,6 +386,8 @@ class App:
                       fill=ORANGE if self.page == 0 else DIM, outline="")
         c.create_oval(self.W - 16, 6, self.W - 10, 12,
                       fill=ORANGE if self.page == 1 else DIM, outline="")
+        if self.page == 0 and pkt and pkt.get("ses"):
+            return   # minimap owns fleet attention on the status page
         if pkt and pkt.get("ses"):
             act = pkt.get("act", 0)
             n = len(pkt["ses"])
