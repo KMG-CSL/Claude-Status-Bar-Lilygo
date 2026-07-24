@@ -18,12 +18,15 @@ from .limits import is_expired
 # st:  run|tool|wait|idle|done (frozen serial contract)
 # tl:  raw tool name ("" when none) — prettified at packet time
 # td:  one-line tool detail
-# el:  elapsed seconds for the display timer
+# el:  elapsed seconds for the display timer (two-timer contract, Item 4:
+#      run/tool tick from turn start, wait ticks from turn end, done is
+#      the frozen turn duration, idle is 0 — all computed at read time)
 # lim: unix epoch the rate limit lifts (0 when not limited)
 # err: short API-error reason ("" when none)
 # src: evidence tier that decided st — "h" hook / "t" transcript / "m" mtime
-StateResult = namedtuple("StateResult", "st tl td el lim err src",
-                         defaults=(0, "", "t"))
+# fin: terminal outcome ok/fail/cancel, "" unless st=done
+StateResult = namedtuple("StateResult", "st tl td el lim err src fin",
+                         defaults=(0, "", "t", ""))
 
 # Orchestration tools legitimately run for minutes with no writes to
 # the main transcript (subagents write elsewhere) - never read them
@@ -35,6 +38,7 @@ def derive(session, cfg, now=None):
     """-> StateResult for `session` at time `now` (injected for tests)."""
     if now is None:
         now = time.time()
+    hooky = _hook_fresh(session, cfg, now)
 
     # Step 1 (Item 5): explicit rate-limit / API-error facts beat every
     # inference. tl stays "" on purpose — the firmware renders a non-empty
@@ -44,14 +48,16 @@ def derive(session, cfg, now=None):
     if session.limit_reset and not is_expired(session.limit_reset, now):
         td = "rate limit · " + fmt_countdown(session.limit_reset - now,
                                              now=now)
-        return StateResult("wait", "", td, _elapsed(session, "wait", now),
+        return StateResult("wait", "", td,
+                           _elapsed(session, "wait", now, hooky),
                            int(session.limit_reset), "")
     if session.error:
         return StateResult("wait", "", ("error · " + session.error)[:32],
-                           _elapsed(session, "wait", now), 0, session.error)
+                           _elapsed(session, "wait", now, hooky),
+                           0, session.error)
 
-    st, tool, detail, src = _state(session, cfg, now)
-    return _apply_sticky_done(session, st, tool, detail, src, now)
+    st, tool, detail, src = _state(session, cfg, now, hooky)
+    return _apply_sticky_done(session, st, tool, detail, src, now, hooky)
 
 
 def _hook_fresh(session, cfg, now):
@@ -77,7 +83,7 @@ def _armed_perm_prompt(session):
     return True
 
 
-def _apply_sticky_done(session, st, tool, detail, src, now):
+def _apply_sticky_done(session, st, tool, detail, src, now, hooky=False):
     """Sticky-done (Extra B, ccm file-store.ts:129-136): once a session
     reports done, late PostToolUse flushes, summary records and noise
     events must not cause done->run flicker. The latch keys on turn_start
@@ -109,23 +115,31 @@ def _apply_sticky_done(session, st, tool, detail, src, now):
             or (session.last_role == "assistant"
                 and session.last_event_ts != latch[2])):  # turn resumed
         session.done_latch = latch = None
+        session.fin = ""      # released: the turn is not finished after all
     if latch is not None:
-        return StateResult("done", "", "", latch[1], 0, "", latch[3])
-    el = _elapsed(session, st, now)
+        return StateResult("done", "", "", latch[1], 0, "", latch[3],
+                           session.fin)
+    el = _elapsed(session, st, now, hooky)
     if st == "done":
         session.done_latch = (session.turn_start, el,
                               session.last_event_ts, src)
-    return StateResult(st, tool, detail, el, 0, "", src)
+        if not session.fin:
+            # transcript-inferred ending (no Stop edge): classify from the
+            # same turn-scoped window the edge path uses. Cancel is a
+            # hook-only signal — an inferred done never has pending ids
+            # (those derive as wait/tool), so ok/fail is the whole space.
+            session.fin = session._classify_fin()
+    return StateResult(st, tool, detail, el, 0, "", src,
+                       session.fin if st == "done" else "")
 
 
-def _state(session, cfg, now):
+def _state(session, cfg, now, hooky):
     # Real parsed events are the activity clock; mtime is only the fallback
     # for transcripts that have produced no events yet. Noise records
     # (file-history-snapshot & friends, skipped in session.py) bump mtime
     # without meaning anything — Extra A. For hook-fresh sessions the clock
     # also counts hook edges (§b: max(last_event_ts, hook edge times)) so
     # an eagerly-created session with an empty transcript reads as active.
-    hooky = _hook_fresh(session, cfg, now)
     activity = session.last_event_ts or 0
     if hooky:
         activity = max(activity, session.hook_last)
@@ -216,13 +230,36 @@ def _state(session, cfg, now):
     return "idle", "", "", "m"
 
 
-def _elapsed(session, st, now):
+def _elapsed(session, st, now, hooky=False):
+    """The two-timer contract (Item 4), computed at read time — el never
+    jumps except at the defined edges:
+
+      run/tool  now − turn start   (UserPromptSubmit edge / last user msg)
+      wait      now − turn end     (Stop or perm-prompt edge / last event)
+      done      turn end − turn start, frozen by the sticky-done latch
+      idle      0
+    """
     if st == "wait":
-        # show how long it's been waiting on the user, not turn length
-        return max(0, int(now - (session.last_event_ts or now)))
-    if session.turn_start:
-        end = session.last_event_ts or now
-        if st in ("run", "tool"):
-            end = now
-        return max(0, int(end - session.turn_start))
-    return 0
+        # WAITING timer: how long it's been waiting on the user, never
+        # turn length. Hook edges pin the exact turn end; the newest
+        # applicable timestamp is when the waiting actually began.
+        cands = [session.last_event_ts]
+        if hooky:
+            cands += [session.turn_stopped_at, session.perm_prompt_at]
+        cands = [t for t in cands if t]
+        return max(0, int(now - max(cands))) if cands else 0
+    if st == "idle":
+        return 0
+    start = (session.turn_started_at if hooky and session.turn_started_at
+             else session.turn_start)
+    if not start:
+        return 0
+    if st in ("run", "tool"):
+        return max(0, int(now - start))    # WORKING timer, ticking
+    # done: frozen turn duration; the Stop edge is the exact end when we
+    # have it, the last transcript event otherwise
+    end = None
+    if hooky and session.turn_stopped_at and session.turn_stopped_at > start:
+        end = session.turn_stopped_at
+    end = end or session.last_event_ts or now
+    return max(0, int(end - start))

@@ -4,6 +4,7 @@ transcript discovery."""
 import json
 import os
 import time
+from collections import deque
 
 from . import engine, limits
 from .fmt import fmt_tokens, parse_ts, pretty_model, pretty_tool, tool_detail
@@ -74,6 +75,13 @@ class Session:
         self.sl_effort = ""           # effort.level
         self._sl_mtime = 0.0          # capture-file mtime already consumed
         self.done_latch = None  # sticky-done: (turn_start, frozen_el, armed_event_ts, src)
+        # terminal outcome of the last finished turn (Item 4):
+        # ""|"ok"|"fail"|"cancel" — shown on the wire only while st=done.
+        # _turn_tail is the classification window: the last 15 messages of
+        # the current turn (claude-notifications-go's turn-scoped cap, so a
+        # ghost error from 300 messages ago can't fail today's turn).
+        self.fin = ""
+        self._turn_tail = deque(maxlen=15)   # (is_api_error, ts)
         # hook edges (Item 1) — authoritative transitions, trusted by the
         # engine only while the session stays hook-fresh (hook_fresh_s)
         self.hook_last = 0.0          # ts of the newest hook event (freshness)
@@ -182,8 +190,12 @@ class Session:
             if not has_tool_result:
                 self.turn_start = ts
                 self.error = ""       # a real prompt is the user acting on it
+                self.fin = ""         # new turn: last outcome is history
+                self._turn_tail.clear()
                 if not self.name and text:
                     self.name = text.strip().replace("\n", " ")[:24]
+            else:
+                self._turn_tail.append((False, ts))
             self.last_role = "user"
             self.last_event_ts = ts
 
@@ -200,6 +212,7 @@ class Session:
                     self.limit_reset = max(self.limit_reset, float(reset))
                 else:
                     self.error = limits.short_reason(rec.get("error") or txt)
+                self._turn_tail.append((True, ts))
                 self.last_role = "assistant"
                 self.last_event_ts = ts
                 return
@@ -233,6 +246,7 @@ class Session:
                     text += b.get("text", "")
             if text:
                 self.last_assistant_text = text[-400:]
+            self._turn_tail.append((False, ts))
             self.last_role = "assistant"
             self.last_event_ts = ts
 
@@ -259,9 +273,15 @@ class Session:
             self.turn_started_at = ts
             self.perm_prompt_at = None
             self.done_latch = None    # a genuine new prompt releases sticky-done
+            self.fin = ""             # new turn: last outcome is history
+            self._turn_tail.clear()
         elif name == "Stop":
             self.turn_stopped_at = ts
             self.perm_prompt_at = None
+            # classify the ending BEFORE clearing pending ids: a Stop with
+            # a still-unmatched tool_use means the turn was cancelled
+            # (Escape), an API error in the turn window means it failed
+            self.fin = self._classify_fin(cancel=bool(self.pending_ids))
             # the turn is over: still-unmatched tool_use ids were abandoned
             # (Escape) and must not read as pending approval (fragile #5)
             self.pending_ids.clear()
@@ -295,10 +315,26 @@ class Session:
             self.pending_ids.clear()
             self.turn_started_at = None
             self.turn_stopped_at = None
+            self.fin = ""
+            self._turn_tail.clear()
         elif name == "SessionEnd":
             self.session_ended_at = ts
+            # SessionEnd mid-turn (no Stop after the last prompt) is a
+            # cancelled turn: freeze the timer here and say so
+            if self.turn_started_at and \
+                    (self.turn_stopped_at or 0) < self.turn_started_at:
+                self.fin = self._classify_fin(cancel=True)
+                self.turn_stopped_at = ts
             self.perm_prompt_at = None
             self.pending_ids.clear()  # nothing left to approve
+
+    def _classify_fin(self, cancel=False):
+        """Terminal outcome of the turn ending now (Item 4): an API error
+        anywhere in the turn window -> fail; a cancellation signal (Stop
+        with unmatched tool_use, SessionEnd mid-turn) -> cancel; else ok."""
+        if any(err for err, _ts in self._turn_tail):
+            return "fail"
+        return "cancel" if cancel else "ok"
 
     # ---- derived state ----
     def mtime(self):
@@ -377,6 +413,7 @@ class Session:
             "at": st == "wait" and not state.lim,
             "lim": int(state.lim),      # additive field; old firmware ignores
             "src": state.src,           # evidence tier: h hook / t transcript / m mtime
+            "fin": state.fin,           # turn outcome ok/fail/cancel, "" unless done
         }
 
 

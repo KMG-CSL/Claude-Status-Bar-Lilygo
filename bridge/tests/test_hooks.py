@@ -281,13 +281,15 @@ class TestHookPrecedence(EngineHookCase):
         self.assertEqual((r.st, r.src), ("run", "h"))
 
     def test_stop_edge_beats_transcript_run(self):
-        # tier 2 would say run (quiet 2s); the Stop edge ends the turn now
+        # tier 2 would say run (quiet 2s); the Stop edge ends the turn now.
+        # el is the exact UserPromptSubmit->Stop duration (Item 4), not the
+        # last-transcript-event approximation
         s = self.make([user(T0), assistant_text(T0 + 10, text="all done.")],
                       mtime=T0 + 10)
         s.apply_hook(hook_event("UserPromptSubmit", T0, transcript_path=s.path))
         s.apply_hook(hook_event("Stop", T0 + 11, transcript_path=s.path))
         r = self.at(s, T0 + 12)
-        self.assertEqual((r.st, r.src, r.el), ("done", "h", 10))
+        self.assertEqual((r.st, r.src, r.el), ("done", "h", 11))
 
     def test_stop_edge_does_not_negate_a_trailing_question(self):
         # §b step 5: Stop confirms the turn ended; the "?" heuristic still
