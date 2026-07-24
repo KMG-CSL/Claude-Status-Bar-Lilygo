@@ -11,6 +11,8 @@ firmware/claude_statusbar/cst3530_fw.h
 # bridge local state
 bridge/config.json
 bridge/logo.bin
+bridge/hook-port
+bridge/alerts.json
 bridge/.venv/
 __pycache__/
 *.pyc

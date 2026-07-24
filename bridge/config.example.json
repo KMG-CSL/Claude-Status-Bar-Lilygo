@@ -16,6 +16,11 @@
   "subagent_live_s": 90,
   "subagent_cache_s": 10,
   "alert_cooldown_s": 86400,
+  "_hooks_comment": "listener is localhost-only; hook install into settings.json stays an explicit CLI step: python -m csb.hooks install",
+  "hooks_enabled": true,
+  "hook_port": 45732,
+  "hook_port_file": "",
+  "hook_fresh_s": 900,
   "_input_comment": "actions: cycle | page | usage | flip | none (pushed to display on connect)",
   "input": {
     "tap": "cycle",

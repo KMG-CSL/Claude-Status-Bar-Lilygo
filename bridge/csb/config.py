@@ -77,6 +77,10 @@ DEFAULT_CONFIG = {
     "subagent_live_s": 90,           # subagent transcript counts as active this long
     "subagent_cache_s": 10,          # how often to re-scan subagent dirs
     "alert_cooldown_s": 86400,       # rate-limit alert re-fire suppression window
+    "hooks_enabled": True,           # localhost hook listener (install stays opt-in CLI)
+    "hook_port": 45732,              # preferred listener port (0 = pure auto)
+    "hook_port_file": "",            # "" = data_dir()/hook-port
+    "hook_fresh_s": 900,             # hook edges trusted while events this recent
     # input bindings, pushed to the display on connect. Actions:
     # "cycle" (next/prev session), "page" (toggle status/usage),
     # "usage" (alias of page), "flip" (rotate 180), "none"
