@@ -76,6 +76,7 @@ DEFAULT_CONFIG = {
     "send_interval_s": 1.0,
     "subagent_live_s": 90,           # subagent transcript counts as active this long
     "subagent_cache_s": 10,          # how often to re-scan subagent dirs
+    "alert_cooldown_s": 86400,       # rate-limit alert re-fire suppression window
     # input bindings, pushed to the display on connect. Actions:
     # "cycle" (next/prev session), "page" (toggle status/usage),
     # "usage" (alias of page), "flip" (rotate 180), "none"

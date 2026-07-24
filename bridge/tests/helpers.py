@@ -66,6 +66,21 @@ def noise(ts, ntype="file-history-snapshot"):
     return {"type": ntype, "timestamp": iso(ts)}
 
 
+def system(ts, text="compact boundary"):
+    return {"type": "system", "timestamp": iso(ts), "content": text}
+
+
+def api_error(ts, error=None, text="API Error"):
+    """Synthetic isApiErrorMessage assistant record (limit banner or
+    API/auth failure)."""
+    rec = {"type": "assistant", "timestamp": iso(ts), "isApiErrorMessage": True,
+           "message": {"role": "assistant", "model": "<synthetic>",
+                       "content": [{"type": "text", "text": text}]}}
+    if error is not None:
+        rec["error"] = error
+    return rec
+
+
 def sidechain(rec):
     rec = dict(rec)
     rec["isSidechain"] = True

@@ -5,7 +5,7 @@ import json
 import os
 import time
 
-from . import engine
+from . import engine, limits
 from .fmt import fmt_tokens, parse_ts, pretty_model, pretty_tool, tool_detail
 from .usage import model_context_limit
 
@@ -28,6 +28,16 @@ NOISE_TYPES = frozenset((
     "attachment",
     "bridge-session",
 ))
+
+
+def _result_text(block):
+    """Text of a tool_result block; content is a str or a block list."""
+    c = block.get("content")
+    if isinstance(c, str):
+        return c
+    if isinstance(c, list):
+        return " ".join(x.get("text", "") for x in c if isinstance(x, dict))
+    return ""
 
 
 class Session:
@@ -53,6 +63,8 @@ class Session:
         self.pending_tool = ""        # tool name awaiting result
         self.pending_tool_ts = None
         self.pending_ids = {}         # tool_use id -> (name, ts)
+        self.limit_reset = 0.0        # unix epoch the rate limit lifts, 0 = none
+        self.error = ""               # short API-error reason ("" = none)
         self.first_seen = time.time()
 
     # ---- incremental parse ----
@@ -122,6 +134,17 @@ class Session:
             content = [{"type": "text", "text": content}]
         content = content or []
 
+        if rtype == "system":
+            # "please wait N minutes" style throttle notices (Item 5)
+            txt = rec.get("content")
+            if not isinstance(txt, str):
+                txt = "".join(b.get("text", "") for b in content
+                              if isinstance(b, dict) and b.get("type") == "text")
+            reset = limits.scan_text(txt, ts)
+            if reset:
+                self.limit_reset = max(self.limit_reset, float(reset))
+            return
+
         if rtype == "user":
             has_tool_result = False
             text = ""
@@ -130,16 +153,35 @@ class Session:
                     if b.get("type") == "tool_result":
                         has_tool_result = True
                         self.pending_ids.pop(b.get("tool_use_id", ""), None)
+                        reset = limits.scan_text(_result_text(b), ts)
+                        if reset:
+                            self.limit_reset = max(self.limit_reset,
+                                                   float(reset))
                     elif b.get("type") == "text":
                         text += b.get("text", "")
             if not has_tool_result:
                 self.turn_start = ts
+                self.error = ""       # a real prompt is the user acting on it
                 if not self.name and text:
                     self.name = text.strip().replace("\n", " ")[:24]
             self.last_role = "user"
             self.last_event_ts = ts
 
         elif rtype == "assistant":
+            if rec.get("isApiErrorMessage"):
+                # synthetic record: a usage-limit banner or an API error
+                # (claude-notifications-go analyzer.go:198). It is real
+                # activity, but its text must not feed the "?" heuristics.
+                txt = "".join(b.get("text", "") for b in content
+                              if isinstance(b, dict) and b.get("type") == "text")
+                reset = limits.scan_text(txt, ts)
+                if reset:
+                    self.limit_reset = max(self.limit_reset, float(reset))
+                else:
+                    self.error = limits.short_reason(rec.get("error") or txt)
+                self.last_role = "assistant"
+                self.last_event_ts = ts
+                return
             m = msg.get("model") or ""
             if m and not m.startswith("<"):   # skip "<synthetic>" system records
                 self.model = m
@@ -153,6 +195,9 @@ class Session:
                 self.tok_out += o
                 self.ctx_tokens = i + cr + cc
                 usage_events.append((ts, i + cc + o))
+                # a successful API call proves limit/error are over
+                self.limit_reset = 0.0
+                self.error = ""
             for key in ("effort", "reasoningEffort", "thinkingEffort"):
                 if rec.get(key):
                     self.effort = str(rec[key])[:10]
@@ -209,7 +254,7 @@ class Session:
             now = time.time()
         if state is None:
             state = engine.derive(self, cfg, now)
-        st, tool, detail, el = state
+        st, tool, detail, el = state.st, state.tl, state.td, state.el
         # context window: per-model via the Models API, config as fallback;
         # if we've measured more tokens than the limit, it's clearly bigger
         limit = model_context_limit(self.model, cfg["context_limit"])
@@ -232,7 +277,11 @@ class Session:
             "to": self.tok_out,
             "cx": min(ctx, 100),
             "tk": fmt_tokens(self.ctx_tokens),
-            "at": st == "wait",
+            # a rate-limited wait is not actionable: at stays False so the
+            # firmware's "! session waiting" banner stays dark (§e). An
+            # API error IS actionable, so it keeps at=True.
+            "at": st == "wait" and not state.lim,
+            "lim": int(state.lim),      # additive field; old firmware ignores
         }
 
 

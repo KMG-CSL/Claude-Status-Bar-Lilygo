@@ -9,11 +9,17 @@ Wave 1 pins today's behavior exactly; later waves add evidence tiers
 import time
 from collections import namedtuple
 
-# st: run|tool|wait|idle|done (frozen serial contract)
-# tl: raw tool name ("" when none) — prettified at packet time
-# td: one-line tool detail
-# el: elapsed seconds for the display timer
-StateResult = namedtuple("StateResult", "st tl td el")
+from .fmt import fmt_countdown
+from .limits import is_expired
+
+# st:  run|tool|wait|idle|done (frozen serial contract)
+# tl:  raw tool name ("" when none) — prettified at packet time
+# td:  one-line tool detail
+# el:  elapsed seconds for the display timer
+# lim: unix epoch the rate limit lifts (0 when not limited)
+# err: short API-error reason ("" when none)
+StateResult = namedtuple("StateResult", "st tl td el lim err",
+                         defaults=(0, ""))
 
 # Orchestration tools legitimately run for minutes with no writes to
 # the main transcript (subagents write elsewhere) - never read them
@@ -25,6 +31,21 @@ def derive(session, cfg, now=None):
     """-> StateResult for `session` at time `now` (injected for tests)."""
     if now is None:
         now = time.time()
+
+    # Step 1 (Item 5): explicit rate-limit / API-error facts beat every
+    # inference. tl stays "" on purpose — the firmware renders a non-empty
+    # tl on st=wait as "approve: <tl>", which would ask the user to approve
+    # a rate limit. The countdown/reason lives in td; is_expired guards
+    # against ever showing a past-epoch banner.
+    if session.limit_reset and not is_expired(session.limit_reset, now):
+        td = "rate limit · " + fmt_countdown(session.limit_reset - now,
+                                             now=now)
+        return StateResult("wait", "", td, _elapsed(session, "wait", now),
+                           int(session.limit_reset), "")
+    if session.error:
+        return StateResult("wait", "", ("error · " + session.error)[:32],
+                           _elapsed(session, "wait", now), 0, session.error)
+
     st, tool, detail = _state(session, cfg, now)
     return StateResult(st, tool, detail, _elapsed(session, st, now))
 

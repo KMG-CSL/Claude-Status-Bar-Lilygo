@@ -10,9 +10,9 @@ import unittest
 from csb.core import build_packet
 from csb.engine import derive
 
-from tests.helpers import (MODEL, T0, assistant_text, assistant_tool_use,
-                           base_cfg, make_session, noise, seed_model_cache,
-                           stub_usage, user)
+from tests.helpers import (MODEL, T0, api_error, assistant_text,
+                           assistant_tool_use, base_cfg, make_session, noise,
+                           seed_model_cache, stub_usage, tool_result, user)
 
 SES_KEYS = ("pj", "nm", "md", "st", "tl", "td", "ef", "tk", "sa", "el",
             "ti", "to", "cx", "at")
@@ -168,6 +168,65 @@ class TestOrderingAndAct(PacketCase):
                           mtime=T0 + 15, first_seen=T0 + 1)
         pkt = self.build([older, newer], now)
         self.assertEqual(pkt["act"], 1)
+
+    def test_rate_limited_wire_mapping(self):
+        # §e: st=wait but tl="" (no "approve:" prefix), at=false (banner
+        # dark), countdown in td, additive lim carries the reset epoch
+        reset = int(T0 + 3600)
+        s = self.make([user(T0), assistant_text(T0 + 1),
+                       tool_result(T0 + 2, "tu_x",
+                                   content=f"limit reached|{reset}")],
+                      mtime=T0 + 2, first_seen=T0)
+        pkt = self.build([s], T0 + 10)
+        e = pkt["ses"][0]
+        self.assertEqual(e["st"], "wait")
+        self.assertEqual(e["tl"], "")
+        self.assertEqual(e["td"], "rate limit · 59m")
+        self.assertFalse(e["at"])
+        self.assertEqual(e["lim"], reset)
+        self.assertIn(e["st"], ST_VALUES)          # no new st value on wire
+
+    def test_error_wire_mapping_keeps_at_true(self):
+        s = self.make([user(T0), api_error(T0 + 1, error="authentication_failed")],
+                      mtime=T0 + 1, first_seen=T0)
+        e = self.build([s], T0 + 5)["ses"][0]
+        self.assertEqual((e["st"], e["tl"], e["td"]),
+                         ("wait", "", "error · auth failed"))
+        self.assertTrue(e["at"])                   # an auth failure is actionable
+        self.assertEqual(e["lim"], 0)
+
+    def test_lim_zero_on_ordinary_sessions(self):
+        s = self.make([user(T0), assistant_text(T0 + 1)],
+                      mtime=T0 + 1, first_seen=T0)
+        self.assertEqual(self.build([s], T0 + 5)["ses"][0]["lim"], 0)
+
+    def test_limited_and_error_do_not_hijack_act(self):
+        # a limited session must not pin auto-follow for its countdown —
+        # the genuine approval-wait appearing later wins act
+        reset = int(T0 + 3600)
+        limited = self.make([user(T0),
+                             tool_result(T0 + 2, "tu_x",
+                                         content=f"limit reached|{reset}")],
+                            mtime=T0 + 2, first_seen=T0)
+        errored = self.make([user(T0), api_error(T0 + 1, error="authentication_failed")],
+                            mtime=T0 + 1, first_seen=T0 + 1)
+        approval = self.make([user(T0), assistant_tool_use(T0 + 1, "Bash", "tu_1")],
+                             mtime=T0 + 1, first_seen=T0 + 2)
+        pkt = self.build([limited, errored, approval], T0 + 25)
+        self.assertEqual([e["st"] for e in pkt["ses"]],
+                         ["wait", "wait", "wait"])
+        self.assertEqual(pkt["act"], 2)            # the genuine approval wins
+
+    def test_limited_alone_can_be_act_via_mtime_fallback(self):
+        reset = int(T0 + 3600)
+        limited = self.make([user(T0),
+                             tool_result(T0 + 2, "tu_x",
+                                         content=f"limit reached|{reset}")],
+                            mtime=T0 + 20, first_seen=T0)
+        running = self.make([user(T0), assistant_text(T0 + 1)],
+                            mtime=T0 + 1, first_seen=T0 + 1)
+        pkt = self.build([limited, running], T0 + 25)
+        self.assertEqual(pkt["act"], 0)            # ordinary recency fallback
 
     def test_empty_packet_shape(self):
         pkt = self.build([], T0)

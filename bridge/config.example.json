@@ -15,6 +15,7 @@
   "send_interval_s": 1.0,
   "subagent_live_s": 90,
   "subagent_cache_s": 10,
+  "alert_cooldown_s": 86400,
   "_input_comment": "actions: cycle | page | usage | flip | none (pushed to display on connect)",
   "input": {
     "tap": "cycle",

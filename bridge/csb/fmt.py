@@ -1,7 +1,11 @@
 """Pure formatting / parsing helpers. No I/O, no state."""
 
 import os
+import time
 from datetime import datetime
+
+_MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
+           "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
 
 
 def parse_ts(s):
@@ -73,7 +77,11 @@ def tool_detail(inp):
     return ""
 
 
-def fmt_countdown(seconds):
+def fmt_countdown(seconds, now=None):
+    """Relative under 24h. Beyond that, pass `now` to get the absolute
+    local reset time ("Jul 26 15:04") — a day-granular countdown is
+    uselessly vague for a rate-limit banner. Without `now` the legacy
+    relative form ("2d1h") is kept (us.r5/r7 layout depends on it)."""
     if seconds is None or seconds < 0:
         return ""
     s = int(seconds)
@@ -82,5 +90,9 @@ def fmt_countdown(seconds):
     if s < 86400:
         h, m = s // 3600, (s % 3600) // 60
         return f"{h}h{m:02d}m" if h < 10 else f"{h}h"
+    if now is not None:
+        lt = time.localtime(now + s)
+        return f"{_MONTHS[lt.tm_mon - 1]} {lt.tm_mday} " \
+               f"{lt.tm_hour:02d}:{lt.tm_min:02d}"
     d, h = s // 86400, (s % 86400) // 3600
     return f"{d}d{h}h"

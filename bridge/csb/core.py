@@ -5,7 +5,10 @@ Transport (serial vs stdout) stays with the caller."""
 import os
 import time
 
+from .config import data_dir, log
 from .engine import LONG_TOOLS, derive
+from .fmt import fmt_countdown
+from .limits import AlertLog, is_expired
 from .session import Session, find_transcripts
 from .usage import UsageTracker
 
@@ -24,8 +27,12 @@ def build_packet(sessions, cfg, usage, now=None):
     states = [derive(s, cfg, now) for s in live]   # one derive per session
     act = 0
     if live:
-        # auto-follow: prefer a waiting session, else most recently active
-        waiting = [i for i, r in enumerate(states) if r.st == "wait"]
+        # auto-follow: prefer a waiting session, else most recently active.
+        # Rate-limited / error waits are excluded from the preference (§e):
+        # a limited session would otherwise pin act for its whole countdown
+        # and starve a genuine approval prompt appearing later.
+        waiting = [i for i, r in enumerate(states)
+                   if r.st == "wait" and not r.lim and not r.err]
         if waiting:
             act = waiting[0]
         else:
@@ -46,6 +53,7 @@ class BridgeCore:
         self.sessions = {}          # transcript path -> Session
         self._session_factory = session_factory
         self._last_rescan = 0.0
+        self.alerts = None          # lazy AlertLog; created on first limit
 
     def rescan(self, now=None):
         """Discover new transcripts, drop deleted ones."""
@@ -71,7 +79,23 @@ class BridgeCore:
         for s in self.sessions.values():
             s.poll(new_usage)
         self.usage.add_events(new_usage)
+        self._limit_alerts(now)
         return build_packet(self.sessions, self.cfg, self.usage, now=now)
+
+    def _limit_alerts(self, now):
+        """Announce a newly-hit rate limit once per cooldown window; the
+        persisted AlertLog keeps a bridge restart from re-firing it."""
+        for path, s in self.sessions.items():
+            if s.limit_reset and not is_expired(s.limit_reset, now):
+                if self.alerts is None:
+                    self.alerts = AlertLog(
+                        os.path.join(data_dir(), "alerts.json"),
+                        self.cfg.get("alert_cooldown_s", 86400))
+                aid = f"limit:{os.path.basename(path)}:{int(s.limit_reset)}"
+                if self.alerts.should_fire(aid, now):
+                    log("limit", f"rate limited, resets in "
+                        f"{fmt_countdown(s.limit_reset - now, now=now)} "
+                        f"({os.path.basename(path)})")
 
     def next_interval(self, now=None):
         """Sleep hint for the caller loop: tighten to approval_confirm_s
