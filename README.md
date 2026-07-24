@@ -1,153 +1,140 @@
-# Claude Status Bar
+# Claude Status Bar — fleet edition
 
-![License](https://img.shields.io/badge/License-MIT-green)
-![Python](https://img.shields.io/badge/Python-3.10--3.14-blue)
-![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-blue)
-![ESP32-S3](https://img.shields.io/badge/MCU-ESP32--S3-orange)
+A ~$25 desk display that shows the live state of your whole Claude Code
+fleet at a glance: which sessions are working, which are **waiting on you**,
+which are rate-limited or erroring, and how full each context window is.
+Multi-session agent state on dedicated hardware is a niche nobody else
+occupies — the existing hardware companions are usage gauges or
+single-session lights.
 
-![clauding](https://img.shields.io/badge/clauding-24%2F7-blueviolet)
-![firmware flashes](https://img.shields.io/badge/firmware_flashes_to_get_here-17-red)
-![touch protocol](https://img.shields.io/badge/touch_protocol-defeated_by_interrupt-yellow)
-![reset pins](https://img.shields.io/badge/reset_pins-shared_(pain)-orange)
-![context](https://img.shields.io/badge/context-100%25_(send_help)-critical)
-![duck lamp](https://img.shields.io/badge/duck_lamp-not_included-lightgrey)
+This is a hard fork of
+[SixSigmaEngineer/Claude-Status-Bar-Lilygo](https://github.com/SixSigmaEngineer/Claude-Status-Bar-Lilygo)
+that has grown its own state engine, hooks pipeline, and fleet UI.
+See [Relationship to upstream](#relationship-to-upstream).
 
-A tiny desk display that shows what Claude is doing, live: current model, the tool it's running ("Bash", "Read", "Percolating…"), elapsed time, tokens in/out, context usage, and your 5-hour / 7-day rate-limit bars. Works with **Claude Desktop (Cowork)** and **Claude Code**, up to 8 sessions at once.
+<!-- TODO: photo of the current fleet-minimap layout. The shot below is
+     upstream's original single-session layout and predates the minimap. -->
+![Live session status (upstream layout — new photo pending)](docs/images/LilyGo1.png)
 
-![Live session status](docs/images/LilyGo1.png)
+## Features (as of 2026-07-24)
 
-![Usage limits page](docs/images/LilyGo2.png)
-
-Mounts wherever you like - desk stand or perched on top of your monitor. One USB-C cable to your PC is both power and data:
-
-![Mounted on a laptop screen](docs/images/LilyGo3.png)
+- **Fleet minimap** — left column shows one cell per session (up to 8):
+  session letter, state color (orange = waiting, green = done, lit = running,
+  dim = idle), a context gauge along the bottom of each cell, and the active
+  session outlined. A cell blinks white briefly when a session flips to
+  waiting.
+- **Auto-follow** — the big right-hand panel follows the most recently
+  active session, and jumps to any session that is genuinely waiting on you.
+- **Waiting / rate-limited / error detection** — pending permission prompts,
+  Claude asking a question, `Claude AI usage limit reached` with a live
+  reset countdown, and API/auth errors are all distinct wait states.
+  Rate-limited sessions never hijack auto-follow.
+- **Hooks pipeline (opt-in)** — a localhost HTTP listener in the bridge plus
+  eight Claude Code hooks give instant, authoritative state edges
+  (turn start/stop, permission prompts) instead of 12–30 s transcript-lag
+  heuristics. Uninstrumented sessions fall back to transcript tailing.
+- **Statusline collector (opt-in)** — a pass-through wrapper around your
+  statusline command captures Claude Code's own `rate_limits`,
+  `context_window.used_percentage`, model, and effort per session — no
+  extra network calls, byte-identical statusline output.
+- **Usage page** — touch-and-hold toggles a 5-hour / 7-day rate-limit page
+  (real numbers from the statusline capture or OAuth usage API when logged
+  in; local estimate otherwise).
+- Touch + button input on both hardware revisions of the board (tap, swipe,
+  hold; auto-detected at boot), remappable in config.
 
 ## Hardware
 
 | Part | Notes |
 |---|---|
-| [LilyGo T-Display S3 Long](https://lilygo.cc/products/t-display-s3-long) | ESP32-S3, 3.4" 640×180 LCD (AXS15231B), capacitive touch, USB-C. ~$25 on AliExpress. |
-| USB-C **data** cable | Powers the display and carries the status feed. That's the whole BOM. |
+| [LilyGo T-Display S3 Long](https://lilygo.cc/products/t-display-s3-long) | ESP32-S3, 3.4" 640×180 LCD, capacitive touch, USB-C. ~$25. |
+| USB-C **data** cable | Power and data in one. That's the whole BOM. |
 
-No battery needed — it lives plugged into your PC. (The board has a JST battery connector + charger if you ever want one, but this project streams over USB anyway.)
+## Quickstart (macOS)
 
-## How it works
+```sh
+git clone git@github.com:KMG-CSL/Claude-Status-Bar-Lilygo.git
+cd Claude-Status-Bar-Lilygo
 
+# 1. Flash the firmware (self-contained: downloads arduino-cli, the ESP32
+#    toolchain (~1.5 GB first run), LilyGo's display driver and libraries
+#    into ~/ClaudeBarBuild — nothing system-wide)
+firmware/build_and_flash.sh --port /dev/cu.usbmodemXXXX   # omit --port to auto-detect
+
+# 2. Run the desktop app (bridge + live display preview + logo uploader;
+#    needs tkinter: brew install python-tk)
+bridge/run_app.sh
+
+#    ...or the headless console bridge (only dependency: pyserial,
+#    installed into a local venv on first run)
+bridge/run_bridge.sh
 ```
-Claude Desktop / Claude Code
-        │  writes JSONL transcripts on disk
-        ▼
-bridge/claude_bar_bridge.py   (Python, runs on your PC)
-        │  tails transcripts → derives per-session state
-        │  + polls Anthropic usage API (real limits) or estimates locally
-        ▼  JSON lines over USB serial @ 115200
-firmware/claude_statusbar.ino  (ESP32-S3)
-        │  renders 640×180 UI, touch + button input
-        ▼
-your eyeballs
+
+`bridge/run_bridge.sh --demo` sends fake data to verify the pipeline;
+`--scan` lists the transcripts found. Windows and Linux paths from upstream
+(`build_and_flash.ps1`, `.bat` launchers) still exist but the fork is
+developed on macOS/Linux; the hooks/statusline installers below refuse to
+run on Windows.
+
+New to this? [docs/ART-SETUP.md](docs/ART-SETUP.md) is the ten-minute
+first-boot walkthrough.
+
+## Opt-in installs: hooks and statusline
+
+Both are explicit CLI steps — the bridge never modifies `~/.claude/` on its
+own. Both back up your settings once to `~/.claude/settings.json.csb-bak`.
+
+```sh
+cd bridge
+./.venv/bin/python -m csb.hooks install        # or: uninstall | status
+./.venv/bin/python -m csb.statusline install   # or: uninstall | status
 ```
 
-The bridge watches these locations (auto-detected per platform; `CLAUDE_CONFIG_DIR` is honored):
-
-- `~/.claude/projects/**/*.jsonl` — Claude Code (all platforms; `%USERPROFILE%\.claude\...` on Windows)
-- Claude Desktop / Cowork transcripts:
-  - Windows: `%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude\local-agent-mode-sessions\...` (the MSIX-virtualized path the app actually writes to)
-  - macOS: `~/Library/Application Support/Claude/local-agent-mode-sessions/...`
-  - Linux: `~/.config/Claude/local-agent-mode-sessions/...`
-
-Per-session state machine: `run` (Clauding…) → `tool` (shows tool name) → `wait` (orange "Waiting on you" — pending permission or Claude asked a question) → `done` / `idle`. Sessions auto-follow the most recently active one, but jump to any session that's waiting on you, with an orange alert banner.
-
-## Setup
-
-Works on **Windows, macOS, and Linux**. New board? It ships with LilyGo's factory demo (a "smart config / ESPTouch / xinyuandianzi" WiFi screen) — ignore it; step 1 flashes right over it.
-
-**Prereq:** Python 3.10+ ([python.org](https://python.org); on Windows check "Add to PATH").
-
-1. **Flash the firmware** — plug the display in via USB-C, then from `firmware/`:
-
-   - **Windows** (PowerShell): `powershell -ExecutionPolicy Bypass -File .\build_and_flash.ps1` (add `-Port COM5` if the wrong port is picked)
-   - **macOS / Linux**: `./build_and_flash.sh` (add `--port /dev/ttyACM0` to override)
-
-   Fully self-contained: downloads arduino-cli, the ESP32 toolchain (~1.5 GB, first run only), LilyGo's official display driver, and all libraries into `C:\ClaudeBarBuild` / `~/ClaudeBarBuild`, then compiles and flashes. If upload fails: hold **BOOT** while plugging in USB, release, retry.
-
-   **Linux one-time setup:** `sudo usermod -aG dialout $USER` (then log out/in). If the serial port vanishes when you plug in, remove the port-grabbing screen-reader daemon: `sudo apt remove brltty`.
-
-2. **Test:** `bridge\run_bridge.bat --demo` (Windows) / `bridge/run_bridge.sh --demo` (Mac/Linux) — fake data, verifies the whole pipeline.
-
-3. **Run the app:** `bridge\run_app.bat` / `bridge/run_app.sh` — a small desktop app that runs the bridge with a **live preview of the display**, a **logo uploader** (pick any JPG/PNG; it's converted to 48×48, streamed to the device, and saved in its flash — try the 15 ready-made icons in `logos/starter-pack`), **minimize-to-system-tray**, and a **start at login** checkbox. Prefer headless? `run_bridge.bat` / `run_bridge.sh` runs the bare console bridge (`install_autostart.bat` on Windows starts it hidden at login) and `set_logo.bat` / `set_logo.sh` uploads a logo from the command line. On Mac/Linux the app needs tkinter: `brew install python-tk` / `sudo apt install python3-tk`.
-
-## Customize the badge
-
-The image in the top-left corner of the screen is yours to change: open the app → **Set logo…** → pick any JPG/PNG (your company logo, avatar, pet, whatever). It's converted to 48×48, sent to the display, and saved in the device's flash so it survives reboots. A starter pack of 15 ready-made icons ships in `logos/starter-pack` — sparkles, terminal, robot, space invader, coffee, and friends. `Clear logo` in the app removes it.
-
-## Controls
-
-All bindings are remappable in `bridge/config.json` under `"input"` (actions: `cycle`, `page`, `usage`, `flip`, `none`). Defaults:
-
-| Action | Result |
-|---|---|
-| Tap screen | Cycle session (A through H) |
-| Swipe left / right | Cycle session |
-| Touch and hold (0.6s) | Usage page (toggle) |
-| BOOT button, short press | Cycle session |
-| BOOT button, hold 1s | Flip display 180° (saved) |
-
-Full touch gestures work on both hardware revisions of the board — the firmware auto-detects the old (AXS15231B integrated touch) and new (Hynitron CST3530) touch controllers at boot. If neither responds, it falls back to tap-only mode (see [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md)).
-
-## Usage limits page
-
-If you're logged into Claude Code, the bridge reads your **real** 5-hour/7-day utilization and reset times from Anthropic's usage API (refreshed every 60s). Credentials come from `~/.claude/.credentials.json` (Windows/Linux) or the login Keychain (macOS). Otherwise it shows a local estimate from transcript token counts — tune `est_cap_5h_tokens` / `est_cap_7d_tokens` in `bridge\config.json` (copy from `config.example.json`).
+- **Hooks** merges 8 tagged entries (`"_tag": "claudestatusbar"`) into
+  `~/.claude/settings.json`; each is a one-liner that POSTs the hook JSON to
+  the bridge's localhost listener, backgrounded so Claude never blocks even
+  with the bridge down. `uninstall` removes only our tagged entries.
+- **Statusline** wraps your existing statusline command as
+  `our-collector | your-command` (output stays byte-identical) and drops
+  per-session capture files under the bridge data dir. `uninstall` restores
+  your original command exactly.
 
 ## Configuration
 
-Copy `bridge/config.example.json` → `bridge/config.json`. Everything is optional. The timing knobs control how eagerly the state machine flips between states — worth tuning to taste:
+Copy `bridge/config.example.json` → `bridge/config.json`. Every key can also
+be overridden per-run via environment: `CSB_<KEY>` (JSON-parsed, e.g.
+`CSB_MAX_SESSIONS=4`, `CSB_PORT=/dev/cu.usbmodem101`), input sub-keys via
+`CSB_INPUT_TAP` etc., and `CSB_DATA_DIR` relocates config/captures/port
+file. `CSB_DEBUG=1` unmutes normally-swallowed diagnostics.
+
+The most useful knobs:
 
 | Key | Default | Meaning |
 |---|---|---|
-| `port` | auto | Serial port override (e.g. `COM5`, `/dev/ttyACM0`) |
-| `max_sessions` | 8 | Sessions shown on the display (firmware cap: 8) |
-| `active_window_min` | 30 | Sessions with no transcript writes for longer than this drop off the display |
-| `idle_after_s` | 120 | Write-silence before a session is considered idle/stale (also the floor for noticing an escaped turn — transcripts are silent during long thinking, so this can't be much lower) |
-| `wait_tool_s` | 20 | A pending tool call older than this (with no writes) reads as a permission prompt → "Waiting on you" |
-| `done_after_s` | 30 | Write-silence after an assistant message before the turn reads as Done |
-| `question_after_s` | 12 | ...but if that message ends with "?", flip to "Waiting on you" this fast |
-| `context_limit` | 200000 | Fallback context window when the Models API is unreachable (per-model lookup is automatic) |
-| `est_cap_5h_tokens` / `est_cap_7d_tokens` | — | Usage-page caps when not logged into Claude Code |
-| `send_interval_s` | 1.0 | Serial update rate |
-| `input` | — | Gesture/button bindings, see [Controls](#controls) |
-| `roots` | auto | Extra transcript directories to watch |
+| `port` | auto | Serial port override (`/dev/cu.usbmodemXXXX`, `COM5`) |
+| `max_sessions` | 8 | Sessions shown (firmware cap: 8) |
+| `active_window_min` | 30 | Sessions silent longer than this drop off the display |
+| `idle_after_s` | 120 | Event-silence before a session reads idle/done |
+| `approval_silence_s` | 20 | Pending tool + this much write-silence → "needs approval" (uninstrumented sessions; hooks make this instant) |
+| `done_after_s` | 30 | Write-silence after an assistant message → Done |
+| `question_after_s` | 12 | ...but a trailing "?" flips to "Waiting on you" this fast |
+| `hooks_enabled` | true | Run the localhost hook listener (hook *install* stays an explicit CLI step) |
 
-## Troubleshooting
+The full surface (hook ports, statusline TTLs, subagent windows, estimate
+caps, input bindings) is documented inline in `bridge/csb/config.py` and
+`config.example.json`.
 
-| Symptom | Fix |
-|---|---|
-| "Bridge offline" on display | Bridge not running, or wrong port: `run_bridge --port COM5` (Windows) / `--port /dev/ttyACM0` (Linux) / `--port /dev/cu.usbmodemXXXX` (Mac) |
-| "No sessions" | `run_bridge --scan` shows which transcripts were found |
-| Linux: permission denied on port | `sudo usermod -aG dialout $USER`, log out/in |
-| Linux: port disappears on plug-in | `sudo apt remove brltty` |
-| Blue/orange colors swapped | Set `SWAP_BYTES 0` in the .ino, re-run build script |
-| Display upside down | Hold BOOT ~1s |
-| Flash fails | Hold BOOT while plugging USB, release, retry |
-| Compile error | Open an issue with the error text |
+## Relationship to upstream
 
-## Project structure
-
-```
-firmware/
-  build_and_flash.ps1        one-click toolchain + build + flash (Windows)
-  build_and_flash.sh         same, for macOS / Linux
-  claude_statusbar/          Arduino sketch (driver files auto-copied by script)
-bridge/
-  claude_bar_app.py          desktop app: bridge + live preview + tray + logo UI
-  claude_bar_bridge.py       core bridge (transcript tailer + serial feeder)
-  set_logo.py / .bat / .sh   command-line logo uploader (48x48 RGB565)
-  run_app.bat / .sh          launch the desktop app
-  run_bridge.bat / .sh       headless console bridge
-  install_autostart.bat      headless autostart at login (Windows)
-  config.example.json
-docs/
-  HOW_IT_WORKS.md            architecture + hardware quirks (worth reading!)
-```
+The original Claude Status Bar is
+[SixSigmaEngineer/Claude-Status-Bar-Lilygo](https://github.com/SixSigmaEngineer/Claude-Status-Bar-Lilygo)
+— the board bring-up, the transcript-tailing bridge, the Windows tooling,
+and the hard-won display/touch quirks documented in
+[docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md) are its work. This fork
+diverged around the fleet minimap, the `bridge/csb/` package split, the
+hooks/statusline pipelines, and rate-limit/error states. Changes that are
+generic rather than fork-specific are offered upstream as PRs once proven
+on real hardware (see [BACKLOG.md](BACKLOG.md)).
 
 ## License
 
