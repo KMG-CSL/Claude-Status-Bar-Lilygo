@@ -2,6 +2,7 @@
 the CLI (claude_bar_bridge.main) and the desktop app (BridgeThread).
 Transport (serial vs stdout) stays with the caller."""
 
+import json
 import os
 import queue
 import time
@@ -134,6 +135,19 @@ class BridgeCore:
         log("hooks", f"listening on 127.0.0.1:{self.hooks.port} "
                      f"(port file {self.hooks.port_file})")
         return self.hooks
+
+    def handle_device_line(self, ln):
+        """Device-initiated commands arriving on the serial console
+        (docs/kvm-design.md): {"t":"focus","sl":N} -> focus that terminal."""
+        if not ln.startswith("{"):
+            return
+        try:
+            msg = json.loads(ln)
+        except ValueError:
+            return
+        if msg.get("t") == "focus":
+            from . import focus
+            focus.focus_slot(self, int(msg.get("sl", -1)))
 
     def rescan(self, now=None):
         """Discover new transcripts, drop deleted ones."""

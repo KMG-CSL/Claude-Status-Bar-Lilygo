@@ -12,6 +12,7 @@ class SerialLink:
         self.port_cfg = port
         self.baud = baud
         self.ser = None
+        self.on_line = None    # callback(line) for device-initiated commands
 
     def _detect(self):
         from serial.tools import list_ports
@@ -46,8 +47,15 @@ class SerialLink:
                 n = self.ser.in_waiting
                 if n:
                     for ln in self.ser.read(n).decode(errors="replace").splitlines():
-                        if ln.strip():
-                            print(f"[device] {ln.strip()}")
+                        ln = ln.strip()
+                        if not ln:
+                            continue
+                        print(f"[device] {ln}")
+                        if self.on_line:
+                            try:       # device-initiated commands (focus etc.)
+                                self.on_line(ln)
+                            except Exception as e:
+                                print(f"[serial] on_line handler failed: {e}")
             except Exception:
                 pass
             return True

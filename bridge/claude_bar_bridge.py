@@ -114,6 +114,8 @@ def main():
 
     core = BridgeCore(cfg)
     core.start_hooks()   # localhost listener only; install stays opt-in CLI
+    if link:
+        link.on_line = core.handle_device_line   # device-initiated focus etc.
     while True:
         pkt = core.step()
         line = json.dumps(pkt, separators=(",", ":")) + "\n"

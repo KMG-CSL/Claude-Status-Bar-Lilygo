@@ -55,6 +55,7 @@ class Session:
         self.offset = 0
         self.name = ""
         self.project = ""             # basename of the session's cwd
+        self.cwd = ""                 # full cwd (KVM focus needs the real path)
         self.entrypoint = ""          # "cli" interactive, "sdk-cli" = claude -p
         self.ai_title = ""            # Claude Code's generated session title
         self.custom_title = ""        # user-set title (wins over ai_title)
@@ -160,6 +161,11 @@ class Session:
         cwd = rec.get("cwd")
         if cwd and not self.project:
             self.project = os.path.basename(cwd.rstrip("/\\")) or cwd
+        if cwd and not self.cwd:
+            # FIRST cwd wins: later events follow the shell tool around,
+            # but the claude process stays in its launch dir — and the
+            # launch dir is what KVM focus must match against lsof
+            self.cwd = cwd
 
         # print-mode / SDK sessions record entrypoint "sdk-cli" (interactive
         # is "cli") — captured so the display can exclude one-shot probes

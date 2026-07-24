@@ -47,6 +47,7 @@ class BridgeThread(threading.Thread):
         self.cfg = bridge.load_config()
         self.link = bridge.SerialLink(self.cfg["port"], self.cfg["baud"])
         self.core = bridge.BridgeCore(self.cfg)
+        self.link.on_line = self.core.handle_device_line
         self.core.start_hooks()  # localhost listener; install stays opt-in CLI
         self.last_pkt = None
         self.connected = False

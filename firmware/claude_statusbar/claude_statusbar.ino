@@ -130,7 +130,7 @@ uint32_t btnDownAt = 0;
 bool     btnWas = false;
 
 /* input bindings (overridable from bridge/config.json via the "cf" packet) */
-enum InputAction : uint8_t { ACT_NONE, ACT_PAGE, ACT_CYCLE, ACT_FLIP };
+enum InputAction : uint8_t { ACT_NONE, ACT_PAGE, ACT_CYCLE, ACT_FLIP, ACT_FOCUS };
 uint8_t actTap      = ACT_CYCLE;
 uint8_t actSwipe    = ACT_CYCLE;
 uint8_t actHold     = ACT_PAGE;   // "usage" maps here (toggle status/usage)
@@ -143,6 +143,7 @@ static uint8_t parseAction(const char *s) {
   if (!strcmp(s, "page"))    return ACT_PAGE;
   if (!strcmp(s, "usage"))   return ACT_PAGE;
   if (!strcmp(s, "flip"))    return ACT_FLIP;
+  if (!strcmp(s, "focus"))   return ACT_FOCUS;
   return ACT_NONE;
 }
 
@@ -588,12 +589,17 @@ static void applyCycle(int d) { if (nSes > 1) act = (act + nSes + d) % nSes; dir
 static void applyLongPress()  { flipped = !flipped; prefs.putBool("flip", flipped); dirty = true; }
 
 static void applyAction(uint8_t a, int dir, const char *src) {
-  const char *names[] = {"none", "page", "cycle", "flip"};
-  Serial.printf("[input] %s -> %s\n", src, names[a & 3]);
+  const char *names[] = {"none", "page", "cycle", "flip", "focus"};
+  Serial.printf("[input] %s -> %s\n", src, names[a < 5 ? a : 0]);
   switch (a) {
     case ACT_PAGE:  applyTap(); break;
     case ACT_CYCLE: applyCycle(dir); break;
     case ACT_FLIP:  applyLongPress(); break;
+    case ACT_FOCUS:
+      // KVM: ask the bridge to focus the active session's terminal
+      if (nSes > 0 && act < nSes)
+        Serial.printf("{\"t\":\"focus\",\"sl\":%d}\n", ses[act].sl);
+      break;
     default: break;
   }
 }
