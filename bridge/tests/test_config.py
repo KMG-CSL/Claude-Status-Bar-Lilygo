@@ -164,6 +164,18 @@ class TestEnvOverrides(EnvCase):
         self.assertEqual(cfg["input"]["tap"], "flip")
         self.assertEqual(cfg["input"]["swipe"], "cycle")
 
+    def test_chime_subkey(self):
+        os.environ["CSB_CHIME_WAIT"] = "/snd/ding.aiff"
+        cfg = self._load_quiet()
+        self.assertEqual(cfg["chime"]["wait"], "/snd/ding.aiff")
+        self.assertEqual(cfg["chime"]["done"], "")
+
+    def test_chime_deep_merge_from_file(self):
+        self.write_cfg({"chime": {"done": "/snd/done.aiff"}})
+        cfg = self._load_quiet()
+        self.assertEqual(cfg["chime"]["done"], "/snd/done.aiff")
+        self.assertEqual(cfg["chime"]["wait"], "")   # untouched default
+
     def test_env_beats_config_file(self):
         self.write_cfg({"baud": 57600})
         os.environ["CSB_BAUD"] = "9600"

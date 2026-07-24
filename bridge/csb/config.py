@@ -86,6 +86,13 @@ DEFAULT_CONFIG = {
     "statusline_ttl_s": 600,         # statusline captures older than this are ignored
     "statusline_dir": "",            # "" = data_dir()/statusline
     "slots_file": "",                # "" = data_dir()/slots.json (stable slot letters)
+    # opt-in chime on a session's transition into wait / done: each value
+    # an afplay(mac)/paplay(linux)-able sound path, "" = silent. One sound
+    # per 10s globally, never on the first packet after startup.
+    "chime": {
+        "wait": "",
+        "done": "",
+    },
     # input bindings, pushed to the display on connect. Actions:
     # "cycle" (next/prev session), "page" (toggle status/usage),
     # "usage" (alias of page), "flip" (rotate 180), "none"
@@ -147,24 +154,28 @@ def _apply_env_overrides(cfg):
     """CSB_<KEY> overrides any merged config key; CSB_INPUT_<KEY> the input
     sub-keys. Returns [(env_name, value)] for startup logging."""
     applied = []
+    nested = ("input", "chime")
     for key in list(cfg):
-        if key == "input":
+        if key in nested:
             continue
         raw = os.environ.get("CSB_" + key.upper())
         if raw is not None:
             cfg[key] = _coerce(raw)
             applied.append(("CSB_" + key.upper(), cfg[key]))
-    for key in list(cfg.get("input") or {}):
-        raw = os.environ.get("CSB_INPUT_" + key.upper())
-        if raw is not None:
-            cfg["input"][key] = _coerce(raw)
-            applied.append(("CSB_INPUT_" + key.upper(), cfg["input"][key]))
+    for group in nested:
+        for key in list(cfg.get(group) or {}):
+            env = f"CSB_{group.upper()}_{key.upper()}"
+            raw = os.environ.get(env)
+            if raw is not None:
+                cfg[group][key] = _coerce(raw)
+                applied.append((env, cfg[group][key]))
     return applied
 
 
 def load_config():
     cfg = dict(DEFAULT_CONFIG)
     cfg["input"] = dict(DEFAULT_CONFIG["input"])
+    cfg["chime"] = dict(DEFAULT_CONFIG["chime"])
     path = os.path.join(data_dir(), "config.json")
     if os.path.exists(path):
         try:
@@ -177,8 +188,11 @@ def load_config():
                             f"{', '.join(unknown)}")
             inp = dict(DEFAULT_CONFIG["input"])
             inp.update(user.get("input") or {})
+            ch = dict(DEFAULT_CONFIG["chime"])
+            ch.update(user.get("chime") or {})
             cfg.update(user)
             cfg["input"] = inp
+            cfg["chime"] = ch
             # honor a user-tuned legacy wait_tool_s as the approval debounce
             # unless the new key was set explicitly
             if "wait_tool_s" in user and "approval_silence_s" not in user:

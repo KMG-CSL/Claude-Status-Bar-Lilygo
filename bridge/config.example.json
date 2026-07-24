@@ -27,6 +27,11 @@
   "statusline_dir": "",
   "_slots_comment": "stable slot letters (ses.sl) persist here; \"\" = <data dir>/slots.json",
   "slots_file": "",
+  "_chime_comment": "opt-in sounds on transition into wait/done: afplay(mac)/paplay(linux) path, \"\" = silent; one sound per 10s",
+  "chime": {
+    "wait": "",
+    "done": ""
+  },
   "_input_comment": "actions: cycle | page | usage | flip | none (pushed to display on connect)",
   "input": {
     "tap": "cycle",

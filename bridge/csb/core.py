@@ -7,6 +7,7 @@ import queue
 import time
 
 from . import statusline
+from .chime import Chimer
 from .config import data_dir, log
 from .engine import LONG_TOOLS, derive
 from .fmt import fmt_countdown
@@ -19,7 +20,7 @@ RESCAN_INTERVAL_S = 15
 DISCOVERY_WINDOW_S = 7 * 86400   # ignore transcripts older than a week
 
 
-def build_packet(sessions, cfg, usage, now=None, slots=None):
+def build_packet(sessions, cfg, usage, now=None, slots=None, chimer=None):
     if now is None:
         now = time.time()
     if slots is None:
@@ -39,6 +40,11 @@ def build_packet(sessions, cfg, usage, now=None, slots=None):
         except Exception:
             pass
     states = [derive(s, cfg, now) for s in live]   # one derive per session
+    if chimer is not None:
+        # transitions are judged on the full qualifying set, pre-curation:
+        # a collapsed done session finishing must not re-chime on reappear
+        chimer.observe({s.session_id: r.st for s, r in zip(live, states)},
+                       now=now)
     live, states, hid = _curate(live, states, cfg["max_sessions"])
     act = 0
     if live:
@@ -107,6 +113,7 @@ class BridgeCore:
         self.slots = SlotAllocator(
             cfg.get("slots_file") or os.path.join(data_dir(), "slots.json"),
             max(8, cfg.get("max_sessions", 8)))
+        self.chimer = Chimer(cfg)
 
     def start_hooks(self):
         """Start the localhost hook listener (Item 1). Called by the
@@ -164,7 +171,7 @@ class BridgeCore:
         self.usage.add_events(new_usage)
         self._limit_alerts(now)
         return build_packet(self.sessions, self.cfg, self.usage, now=now,
-                            slots=self.slots)
+                            slots=self.slots, chimer=self.chimer)
 
     def _drain_hooks(self, now):
         """-> [(session, event)] for every queued hook event. Events route
