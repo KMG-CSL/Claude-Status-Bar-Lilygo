@@ -55,9 +55,27 @@ PC → device, newline-delimited JSON:
 
 ```jsonc
 {"t":"s",                     // status packet, 1/sec
- "ses":[{"nm":"name","md":"Fable 5","st":"tool","tl":"Bash","ef":"medium",
-          "el":74,"ti":56500,"to":4700,"cx":6,"at":false}],
- "act":0,
+ "ses":[{"pj":"widget",       // project (cwd basename)
+         "nm":"Fix the flux capacitor",   // session title
+         "md":"Fable 5",      // pretty model name
+         "st":"tool",         // run|tool|wait|idle|done (frozen set)
+         "tl":"Bash",         // tool name ("" when none)
+         "td":"npm test",     // one-line tool/state detail
+         "ef":"medium",       // reasoning effort level
+         "tk":"40k",          // pretty context tokens
+         "sa":2,              // live subagents (events in last subagent_live_s)
+         "el":74,             // elapsed s (run/tool: turn; wait: waiting; done: frozen)
+         "ti":56500,"to":4700, // tokens in / out
+         "cx":6,              // context window used %
+         "at":false,          // actionable wait (drives the attention banner)
+         // additive fields — old firmware ignores unknown keys:
+         "lim":0,             // unix epoch a rate limit lifts (0 = not limited)
+         "src":"h",           // evidence tier: h hook / t transcript / m mtime
+         "fin":"",            // last turn outcome ""|ok|fail|cancel (st=done only)
+         "sl":0,              // stable slot index 0-7 (letter A-H, never drifts)
+         "pm":""}],           // permission mode ""|plan|acceptEdits|bypassPermissions
+ "act":0,                     // index into ses[] to auto-follow
+ "hid":0,                     // additive: idle/done sessions collapsed beyond max_sessions
  "us":{"p5":28,"p7":52,"r5":"36m","r7":"5d10h","est":false}}
 
 {"t":"lg","off":0,"px":"<hex>","last":false}   // logo chunks (48x48 RGB565 LE)
