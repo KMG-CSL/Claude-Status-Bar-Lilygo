@@ -141,7 +141,7 @@ class Session:
             if not isinstance(txt, str):
                 txt = "".join(b.get("text", "") for b in content
                               if isinstance(b, dict) and b.get("type") == "text")
-            reset = limits.scan_text(txt, ts)
+            reset = limits.scan_text(txt, ts, relative=True)
             if reset:
                 self.limit_reset = max(self.limit_reset, float(reset))
             return
@@ -154,6 +154,9 @@ class Session:
                     if b.get("type") == "tool_result":
                         has_tool_result = True
                         self.pending_ids.pop(b.get("tool_use_id", ""), None)
+                        # structured "limit reached|<epoch>" only: tool
+                        # output is agent-visible prose, and "wait N
+                        # minutes" in a build log is not a rate limit
                         reset = limits.scan_text(_result_text(b), ts)
                         if reset:
                             self.limit_reset = max(self.limit_reset,
@@ -175,7 +178,8 @@ class Session:
                 # activity, but its text must not feed the "?" heuristics.
                 txt = "".join(b.get("text", "") for b in content
                               if isinstance(b, dict) and b.get("type") == "text")
-                reset = limits.scan_text(txt, ts)
+                # synthetic (never agent prose): the relative form is safe
+                reset = limits.scan_text(txt, ts, relative=True)
                 if reset:
                     self.limit_reset = max(self.limit_reset, float(reset))
                 else:

@@ -18,17 +18,25 @@ WAIT_MINUTES_RE = re.compile(r"wait\s+(\d+)\s+minutes?", re.IGNORECASE)
 API_CODE_RE = re.compile(r"API Error:?\s*(\d{3})")
 
 
-def scan_text(text, ts):
+def scan_text(text, ts, relative=False):
     """-> unix reset epoch, or 0 when the text carries no limit signal.
-    `ts` (record timestamp) anchors the relative wait-N-minutes form."""
+
+    By default only the structured "limit reached|<epoch>" form matches —
+    safe on any text. The relative wait-N-minutes form (anchored to `ts`,
+    the record timestamp) is opt-in via `relative=True` and must only be
+    enabled for system/synthetic records: tool_result text is agent-visible
+    program output, and a deploy log saying "please wait 45 minutes" is not
+    a rate limit (design §Item 5 scopes the relative form to system
+    messages)."""
     if not text:
         return 0
     m = LIMIT_EPOCH_RE.search(text)
     if m:
         return int(m.group(1))
-    m = WAIT_MINUTES_RE.search(text)
-    if m:
-        return int(ts + int(m.group(1)) * 60)
+    if relative:
+        m = WAIT_MINUTES_RE.search(text)
+        if m:
+            return int(ts + int(m.group(1)) * 60)
     return 0
 
 

@@ -25,14 +25,23 @@ class TestScanText(unittest.TestCase):
             1750010000)
 
     def test_wait_minutes_anchored_to_record_ts(self):
-        self.assertEqual(scan_text("please wait 30 minutes", T0),
+        self.assertEqual(scan_text("please wait 30 minutes", T0, relative=True),
                          int(T0 + 1800))
-        self.assertEqual(scan_text("Wait 1 minute.", T0), int(T0 + 60))
+        self.assertEqual(scan_text("Wait 1 minute.", T0, relative=True),
+                         int(T0 + 60))
+
+    def test_wait_minutes_requires_relative_opt_in(self):
+        # default scan is structured-epoch only: agent-visible prose like
+        # a deploy log's "wait 45 minutes" must not read as a rate limit
+        self.assertEqual(scan_text("please wait 30 minutes", T0), 0)
+        self.assertEqual(
+            scan_text("Cluster busy - please wait 45 minutes.", T0), 0)
 
     def test_no_signal(self):
         for text in ("", "all tests passed", "the limit was reached today",
                      "wait for me"):
             self.assertEqual(scan_text(text, T0), 0, repr(text))
+            self.assertEqual(scan_text(text, T0, relative=True), 0, repr(text))
 
 
 class TestIsExpired(unittest.TestCase):
@@ -75,6 +84,18 @@ class TestSessionLimitFacts(LimitsSessionCase):
 
     def test_tool_result_sets_reset_epoch(self):
         self.assertEqual(self._limited().limit_reset, self.RESET)
+
+    def test_tool_result_prose_wait_minutes_is_not_a_limit(self):
+        # a deploy log mentioning "wait 45 minutes" is ordinary tool
+        # output, not a throttle notice — no banner, session stays run
+        s = self.make(
+            [user(T0),
+             tool_result(T0 + 2, "tu_x",
+                         content="Deploy queued. Cluster busy - please "
+                                 "wait 45 minutes before retrying.")],
+            mtime=T0 + 2)
+        self.assertEqual(s.limit_reset, 0.0)
+        self.assertEqual(derive(s, self.cfg, T0 + 10).st, "run")
 
     def test_system_wait_minutes_sets_relative_reset(self):
         s = self.make([user(T0), system(T0 + 5, "please wait 15 minutes")],
