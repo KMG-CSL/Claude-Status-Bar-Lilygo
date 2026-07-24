@@ -87,6 +87,30 @@ def sidechain(rec):
     return rec
 
 
+# ---- hook builders ---------------------------------------------------------
+
+def hook_payload(name, transcript_path, session_id="sid-1",
+                 cwd="/home/u/projects/widget", tool_name=None, **extra):
+    """Recorded-style hook payload as Claude Code POSTs it on stdin —
+    includes the fields the bridge ignores, to prove tolerant parsing."""
+    p = {"session_id": session_id, "transcript_path": transcript_path,
+         "cwd": cwd, "hook_event_name": name,
+         "permission_mode": "default"}
+    if tool_name is not None:
+        p["tool_name"] = tool_name
+    p.update(extra)
+    return p
+
+
+def hook_event(name, ts, transcript_path="", session_id="sid-1",
+               cwd="/home/u/projects/widget", tool_name=None):
+    """Parsed listener event (what the queue carries) with an injected
+    arrival ts, for driving Session.apply_hook on a fake clock."""
+    return {"hook_event_name": name, "session_id": session_id,
+            "transcript_path": transcript_path, "cwd": cwd,
+            "tool_name": tool_name, "ts": ts}
+
+
 # ---- session / cfg builders ------------------------------------------------
 
 def write_jsonl(path, records):
