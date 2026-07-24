@@ -5,13 +5,14 @@
  * context %) plus a usage-limits page. Fed by claude_bar_bridge.py on the PC
  * over USB serial @ 115200 as newline-delimited JSON.
  *
- * Controls (with a working touch chip - see touch_drv.h):
- *   - Tap screen            : switch page (status <-> usage)
+ * Controls - all remappable via bridge/config.json "input" (defaults):
+ *   - Tap screen            : cycle active session
  *   - Swipe left/right      : cycle active session
- *   - Touch-hold            : unbound (reserved for future use)
+ *   - Touch-hold (0.6s)     : usage page (toggle)
  *   - BOOT button short     : cycle active session
  *   - BOOT button long (1s) : flip display 180° (saved to flash)
- * Without one (blind-tap fallback): tap = switch page, BOOT as above.
+ * Actions: cycle | page | usage | flip | none. Boards without a working
+ * touch chip fall back to blind-tap = the "tap" action.
  *
  * Build notes: requires AXS15231B.cpp/.h + pins_config.h from the official
  * LilyGo T-Display-S3-Long repo copied into this sketch folder (the
@@ -118,11 +119,28 @@ volatile bool touchIRQ = false;
 volatile uint32_t irqCount = 0;
 void IRAM_ATTR touchISR() { touchIRQ = true; irqCount++; }
 TouchBackend touchBE = TOUCH_NONE;
-bool     touching = false;
+bool     touching = false, holdFired = false;
 int16_t  tX0 = 0, tY0 = 0, tXl = 0, tYl = 0;
 uint32_t tDownAt = 0;
 uint32_t btnDownAt = 0;
 bool     btnWas = false;
+
+/* input bindings (overridable from bridge/config.json via the "cf" packet) */
+enum InputAction : uint8_t { ACT_NONE, ACT_PAGE, ACT_CYCLE, ACT_FLIP };
+uint8_t actTap      = ACT_CYCLE;
+uint8_t actSwipe    = ACT_CYCLE;
+uint8_t actHold     = ACT_PAGE;   // "usage" maps here (toggle status/usage)
+uint8_t actBtnShort = ACT_CYCLE;
+uint8_t actBtnLong  = ACT_FLIP;
+
+static uint8_t parseAction(const char *s) {
+  if (!s)                    return ACT_NONE;
+  if (!strcmp(s, "cycle"))   return ACT_CYCLE;
+  if (!strcmp(s, "page"))    return ACT_PAGE;
+  if (!strcmp(s, "usage"))   return ACT_PAGE;
+  if (!strcmp(s, "flip"))    return ACT_FLIP;
+  return ACT_NONE;
+}
 
 static char lineBuf[4096];
 static size_t lineLen = 0;
@@ -465,8 +483,18 @@ static void redraw() {
 
 static void applyTap()        { page = (page + 1) % 2; dirty = true; }
 static void applyCycle(int d) { if (nSes > 1) act = (act + nSes + d) % nSes; dirty = true; }
-static void applyDoubleTap()  { applyCycle(+1); }
 static void applyLongPress()  { flipped = !flipped; prefs.putBool("flip", flipped); dirty = true; }
+
+static void applyAction(uint8_t a, int dir, const char *src) {
+  const char *names[] = {"none", "page", "cycle", "flip"};
+  Serial.printf("[input] %s -> %s\n", src, names[a & 3]);
+  switch (a) {
+    case ACT_PAGE:  applyTap(); break;
+    case ACT_CYCLE: applyCycle(dir); break;
+    case ACT_FLIP:  applyLongPress(); break;
+    default: break;
+  }
+}
 
 /* Gesture engine over real coordinates (CST3530 / AXS backends).
  * The controller reports in portrait axes: x = short side (0..179),
@@ -475,12 +503,19 @@ static void gestureFrom(const TouchSample &s) {
   uint32_t now = millis();
   if (s.down && !touching) {                 // finger down
     touching = true;
+    holdFired = false;
     tX0 = tXl = s.x; tY0 = tYl = s.y;
     tDownAt = now;
   } else if (s.down && touching) {           // drag
     tXl = s.x; tYl = s.y;
+    if (!holdFired && now - tDownAt > 600 &&
+        abs(tYl - tY0) < 40 && abs(tXl - tX0) < 40) {
+      holdFired = true;
+      applyAction(actHold, +1, "hold");
+    }
   } else if (!s.down && touching) {          // finger up
     touching = false;
+    if (holdFired) return;
     // the lift report itself carries coordinates - use them: redraws block
     // the poll loop long enough that drag samples are often missed entirely
     if (s.x || s.y) { tXl = s.x; tYl = s.y; }
@@ -489,15 +524,13 @@ static void gestureFrom(const TouchSample &s) {
     if (abs(dy) >= 80 && dt < 900) {
       int dir = (dy < 0) ? +1 : -1;          // swipe toward connector = next
       if (flipped) dir = -dir;
-      Serial.printf("[touch] swipe %+d (dy=%d dt=%lu) -> session\n",
+      Serial.printf("[touch] swipe %+d (dy=%d dt=%lu)\n",
                     dir, dy, (unsigned long)dt);
-      applyCycle(dir);
+      applyAction(actSwipe, dir, "swipe");
     } else if (dt < 350 && abs(dy) < 40) {
-      Serial.printf("[touch] tap (dy=%d dt=%lu) -> page\n",
-                    dy, (unsigned long)dt);
-      applyTap();
+      Serial.printf("[touch] tap (dy=%d dt=%lu)\n", dy, (unsigned long)dt);
+      applyAction(actTap, +1, "tap");
     }
-    // touch-hold (no swipe) is deliberately unbound - reserved
   }
 }
 
@@ -523,8 +556,7 @@ static void pollTouch() {
     lastActivity = now;
     if (armed) {
       armed = false;
-      Serial.println("[touch] tap -> page");
-      applyTap();
+      applyAction(actTap, +1, "blind-tap");
     }
   }
   if (!armed && now - lastActivity > 1200) {
@@ -538,8 +570,8 @@ static void pollButton() {
   uint32_t now = millis();
   if (down && !btnWas) btnDownAt = now;
   if (!down && btnWas) {
-    if (now - btnDownAt > 800) applyLongPress();  // long = flip display
-    else applyDoubleTap();                        // short = cycle session
+    if (now - btnDownAt > 800) applyAction(actBtnLong, +1, "boot-long");
+    else                       applyAction(actBtnShort, +1, "boot-short");
   }
   btnWas = down;
 }
@@ -597,6 +629,15 @@ static void handleLine(const char *line) {
     dirty = true;
   } else if (!strcmp(t, "ping")) {
     lastPacket = millis();
+  } else if (!strcmp(t, "cf")) {
+    // input bindings from bridge/config.json
+    actTap      = parseAction(doc["tap"] | (const char *)nullptr);
+    actSwipe    = parseAction(doc["swipe"] | (const char *)nullptr);
+    actHold     = parseAction(doc["hold"] | (const char *)nullptr);
+    actBtnShort = parseAction(doc["bshort"] | (const char *)nullptr);
+    actBtnLong  = parseAction(doc["blong"] | (const char *)nullptr);
+    Serial.printf("[cfg] input tap=%d swipe=%d hold=%d bshort=%d blong=%d\n",
+                  actTap, actSwipe, actHold, actBtnShort, actBtnLong);
   } else if (!strcmp(t, "lg")) {
     // logo chunk: {"t":"lg","off":<byte offset>,"px":"<hex>","last":bool}
     if (!logoBuf) return;
