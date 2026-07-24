@@ -113,6 +113,7 @@ def main():
         return
 
     core = BridgeCore(cfg)
+    core.start_hooks()   # localhost listener only; install stays opt-in CLI
     while True:
         pkt = core.step()
         line = json.dumps(pkt, separators=(",", ":")) + "\n"
