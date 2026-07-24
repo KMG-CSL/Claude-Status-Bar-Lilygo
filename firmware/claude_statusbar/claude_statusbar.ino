@@ -88,11 +88,14 @@ struct Sess {
   long ti, to;  // tokens in / out
   int  cx;      // context %
   bool at;      // needs attention
+  int  sl;      // stable slot letter index (falls back to array index)
+  char pm[18];  // permissionMode ("", plan, acceptEdits, bypassPermissions)
 };
 
 #define MAX_SES 8
 Sess ses[MAX_SES];
 int  nSes = 0, act = 0;
+int  nHid = 0;                        // curated-away idle/done sessions
 uint32_t flashUntil[MAX_SES] = {0};   // wait-edge blink deadline per slot
 
 struct { int p5 = -1, p7 = -1; char r5[14] = ""; char r7[14] = ""; bool est = true; } usage;
@@ -273,7 +276,7 @@ static void drawHeader() {
   for (int i = 0; i < nSes; i++) if (ses[i].at && i != act) { anyAttn = true; attnIdx = i; break; }
   if (anyAttn) {
     cv->fillRect(0, 0, CANVAS_W, 14, C_ORANGE);
-    snprintf(buf, sizeof(buf), "! session %c waiting", 'A' + attnIdx);
+    snprintf(buf, sizeof(buf), "! session %c waiting", 'A' + ses[attnIdx].sl);
     cv->setTextColor(C_BG);
     cv->setCursor(6, 3);
     cv->print(buf);
@@ -281,7 +284,7 @@ static void drawHeader() {
 
   // session letter + count, top right
   if (nSes > 0) {
-    snprintf(buf, sizeof(buf), "%c %d/%d", 'A' + act, act + 1, nSes);
+    snprintf(buf, sizeof(buf), "%c %d/%d", 'A' + ses[act].sl, act + 1, nSes);
     cv->setTextColor(anyAttn ? C_BG : C_DIM);
     cv->setCursor(CANVAS_W - 6 * strlen(buf) - 34, anyAttn ? 3 : 6);
     cv->print(buf);
@@ -339,7 +342,12 @@ static void drawFleetGrid() {
     cv->setTextSize(ts);
     cv->setTextColor(fg);
     cv->setCursor(cx0 + 6, letterY);
-    cv->write('A' + i);
+    cv->write('A' + ses[i].sl);
+    // permissionMode dot, cell top-right: red = bypass, yellow = acceptEdits
+    if (!strcmp(ses[i].pm, "bypassPermissions"))
+      cv->fillRect(cx0 + cw - 8, cy0 + 3, 5, 5, C_RED);
+    else if (!strcmp(ses[i].pm, "acceptEdits"))
+      cv->fillRect(cx0 + cw - 8, cy0 + 3, 5, 5, C_YELLOW);
     if (ses[i].pj[0]) {
       // project label next to the letter, hard-capped to cell width
       cv->setTextSize(1);
@@ -371,6 +379,13 @@ static void drawFleetGrid() {
     if (bw > 0) cv->fillRect(cx0 + 3, cy0 + ch - 6, bw, 3, ctxColor(cxp));
   }
   cv->setTextSize(1);
+  if (nHid > 0) {
+    char hb[12];
+    snprintf(hb, sizeof(hb), "+%d idle", nHid);
+    cv->setTextColor(C_DIM);
+    cv->setCursor(x0, 170);
+    cv->print(hb);
+  }
 }
 
 static void drawStatusPage() {
@@ -402,7 +417,7 @@ static void drawStatusPage() {
     cv->print(mline);
 
     // session letter first — anchors the minimap letters to the big view
-    char lbuf[2] = { (char)('A' + act), 0 };
+    char lbuf[2] = { (char)('A' + s.sl), 0 };
     cv->setFont(&FreeSansBold12pt7b);
     cv->setTextColor(C_ORANGE);
     cv->setCursor(zone0, 40);
@@ -462,8 +477,15 @@ static void drawStatusPage() {
       strlcat(dline, sab, sizeof(dline));
     }
     if (dline[0]) {
+      // mutating tools get a warmer tint; read-only stays dim
+      uint16_t dcol = C_DIM;
+      if (!strcmp(s.st, "tool") &&
+          (!strcmp(s.tl, "Bash") || !strcmp(s.tl, "Write") ||
+           !strcmp(s.tl, "Edit") || !strcmp(s.tl, "MultiEdit") ||
+           !strcmp(s.tl, "NotebookEdit")))
+        dcol = C_YELLOW;
       cv->setFont(&FreeSans9pt7b);
-      printTruncated(dline, zone0 + 8, 137, zone1, C_DIM);
+      printTruncated(dline, zone0 + 8, 137, zone1, dcol);
     }
   }
 
@@ -705,9 +727,13 @@ static void handleLine(const char *line) {
       s.to = o["to"] | 0L;
       s.cx = o["cx"] | 0;
       s.at = o["at"] | false;
+      s.sl = o["sl"] | n;
+      if (s.sl < 0 || s.sl > 25) s.sl = n;
+      strlcpy(s.pm, o["pm"] | "", sizeof(s.pm));
       n++;
     }
     nSes = n;
+    nHid = doc["hid"] | 0;
     // Follow the bridge's session pick only when it CHANGES (a real
     // auto-follow event, e.g. a session starts waiting). Otherwise the
     // 1/sec packets would stomp a manual BOOT-button selection.
