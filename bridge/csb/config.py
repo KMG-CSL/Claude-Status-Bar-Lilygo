@@ -74,7 +74,9 @@ DEFAULT_CONFIG = {
     "est_cap_5h_tokens": 8000000,    # only used if OAuth usage API unavailable
     "est_cap_7d_tokens": 60000000,
     "send_interval_s": 1.0,
-    "subagent_live_s": 90,           # subagent transcript counts as active this long
+    "subagent_live_s": 15,           # subagent counts as live only with events this
+                                     # recent (Stargx liveness; was 90 — finished
+                                     # helpers lingered in sa for a minute and a half)
     "subagent_cache_s": 10,          # how often to re-scan subagent dirs
     "alert_cooldown_s": 86400,       # rate-limit alert re-fire suppression window
     "hooks_enabled": True,           # localhost hook listener (install stays opt-in CLI)

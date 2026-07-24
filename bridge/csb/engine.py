@@ -57,7 +57,19 @@ def derive(session, cfg, now=None):
                            0, session.error)
 
     st, tool, detail, src = _state(session, cfg, now, hooky)
-    return _apply_sticky_done(session, st, tool, detail, src, now, hooky)
+    r = _apply_sticky_done(session, st, tool, detail, src, now, hooky)
+    return _apply_delegating(session, r, cfg, now)
+
+
+def _apply_delegating(session, r, cfg, now):
+    """"Done + N subagents" (BACKLOG): the turn ended (Stop) but Task-
+    family tool_use ids are still unresolved — background workers are in
+    flight. st stays done/idle (wire frozen: no new st value); the detail
+    line says what "done" undersells. Only fills an otherwise-empty td."""
+    if r.st in ("done", "idle") and not r.td and session.task_ids:
+        n = session.subagent_count(cfg, now) or len(session.task_ids)
+        return r._replace(td=f"delegating · {n} agent{'s' if n != 1 else ''}")
+    return r
 
 
 def _hook_fresh(session, cfg, now):

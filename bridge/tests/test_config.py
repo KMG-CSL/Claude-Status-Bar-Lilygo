@@ -54,7 +54,7 @@ class TestLoadConfig(EnvCase):
                     "done_after_s", "question_after_s", "send_interval_s",
                     "subagent_live_s", "subagent_cache_s", "input"):
             self.assertIn(key, cfg)
-        self.assertEqual(cfg["subagent_live_s"], 90)
+        self.assertEqual(cfg["subagent_live_s"], 15)
         self.assertEqual(cfg["subagent_cache_s"], 10)
 
     def test_user_file_merge_and_input_deep_merge(self):

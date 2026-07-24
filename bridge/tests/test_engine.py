@@ -12,8 +12,8 @@ import unittest
 from csb.engine import derive
 
 from tests.helpers import (T0, append_jsonl, assistant_text,
-                           assistant_tool_use, base_cfg, make_session, noise,
-                           tool_result, user)
+                           assistant_tool_use, base_cfg, hook_event,
+                           make_session, noise, tool_result, user)
 
 
 class EngineCase(unittest.TestCase):
@@ -346,6 +346,66 @@ class TestStickyDone(EngineCase):
         s.mclock.value = T0 + 10
         r = self.at(s, T0 + 500)                   # deep stale
         self.assertEqual((r.st, r.el), ("done", 10))
+
+
+class TestDelegating(EngineCase):
+    """"Done + N subagents": a Stop with unresolved Task-family tool_use
+    is delegation — st stays done (wire frozen), td says what Done
+    undersells, and the turn is not misread as cancelled."""
+
+    def _delegating(self, name="Task"):
+        s = self.make([user(T0),
+                       assistant_tool_use(T0 + 2, name, "tu_t",
+                                          {"description": "survey"})],
+                      mtime=T0 + 2)
+        s.apply_hook(hook_event("UserPromptSubmit", T0))
+        s.apply_hook(hook_event("Stop", T0 + 10))
+        return s
+
+    def test_done_tile_reads_delegating_not_cancel(self):
+        s = self._delegating()
+        r = self.at(s, T0 + 20)
+        self.assertEqual(r.st, "done")
+        self.assertEqual(r.td, "delegating · 1 agent")
+        self.assertEqual(r.fin, "ok")
+
+    def test_multiple_unresolved_tasks_pluralize(self):
+        s = self.make([user(T0),
+                       assistant_tool_use(T0 + 2, "Task", "tu_a", {}),
+                       assistant_tool_use(T0 + 3, "Task", "tu_b", {})],
+                      mtime=T0 + 3)
+        s.apply_hook(hook_event("UserPromptSubmit", T0))
+        s.apply_hook(hook_event("Stop", T0 + 10))
+        r = self.at(s, T0 + 20)
+        self.assertEqual(r.td, "delegating · 2 agents")
+
+    def test_tool_result_ends_delegation(self):
+        s = self._delegating()
+        self.at(s, T0 + 20)                       # latch arms, td delegating
+        append_jsonl(s.path, [tool_result(T0 + 30, "tu_t", "worker report")])
+        s.poll([])
+        r = self.at(s, T0 + 35)
+        self.assertEqual((r.st, r.td), ("done", ""))
+
+    def test_escape_on_a_plain_tool_still_cancels(self):
+        s = self.make([user(T0), assistant_tool_use(T0 + 2, "Bash", "tu_1")],
+                      mtime=T0 + 2)
+        s.apply_hook(hook_event("UserPromptSubmit", T0))
+        s.apply_hook(hook_event("Stop", T0 + 10))
+        r = self.at(s, T0 + 20)
+        self.assertEqual((r.fin, r.td), ("cancel", ""))
+
+    def test_delegating_never_overwrites_a_real_detail(self):
+        # rate-limited (td = countdown) wins over the delegating line
+        s = self._delegating()
+        s.limit_reset = T0 + 3600
+        r = self.at(s, T0 + 20)
+        self.assertTrue(r.td.startswith("rate limit"))
+
+    def test_session_start_clears_delegation(self):
+        s = self._delegating()
+        s.apply_hook(hook_event("SessionStart", T0 + 30))
+        self.assertEqual(s.task_ids, {})
 
 
 class TestElapsed(EngineCase):

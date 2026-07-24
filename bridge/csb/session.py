@@ -67,6 +67,11 @@ class Session:
         self.pending_tool = ""        # tool name awaiting result
         self.pending_tool_ts = None
         self.pending_ids = {}         # tool_use id -> (name, ts)
+        # delegation tracking ("Done + N subagents", Stargx): Task-family
+        # tool_use ids still unresolved when a Stop edge ended the turn.
+        # The orchestrator is done but workers are in flight — derive()
+        # surfaces it as td="delegating · N agents" on done/idle tiles.
+        self.task_ids = {}            # tool_use id -> name
         self.limit_reset = 0.0        # unix epoch the rate limit lifts, 0 = none
         self.error = ""               # short API-error reason ("" = none)
         # statusline capture (Item 3), populated by csb.statusline.refresh
@@ -178,6 +183,7 @@ class Session:
                     if b.get("type") == "tool_result":
                         has_tool_result = True
                         self.pending_ids.pop(b.get("tool_use_id", ""), None)
+                        self.task_ids.pop(b.get("tool_use_id", ""), None)
                         # structured "limit reached|<epoch>" only: tool
                         # output is agent-visible prose, and "wait N
                         # minutes" in a build log is not a rate limit
@@ -278,6 +284,15 @@ class Session:
         elif name == "Stop":
             self.turn_stopped_at = ts
             self.perm_prompt_at = None
+            # unresolved Task-family tool_use at Stop is delegation, not a
+            # cancelled turn: background workers outlive the orchestrator's
+            # Stop and their tool_result arrives later. Move them aside
+            # FIRST so they neither read as "cancel" nor as pending
+            # approval; tool_result / SessionStart / SessionEnd release.
+            for tid, (tname, _pts, _d) in list(self.pending_ids.items()):
+                if tname in engine.LONG_TOOLS:
+                    self.task_ids[tid] = tname
+                    del self.pending_ids[tid]
             # classify the ending BEFORE clearing pending ids: a Stop with
             # a still-unmatched tool_use means the turn was cancelled
             # (Escape), an API error in the turn window means it failed
@@ -313,6 +328,7 @@ class Session:
             self.perm_prompt_at = None
             self.done_latch = None
             self.pending_ids.clear()
+            self.task_ids.clear()
             self.turn_started_at = None
             self.turn_stopped_at = None
             self.fin = ""
@@ -327,6 +343,7 @@ class Session:
                 self.turn_stopped_at = ts
             self.perm_prompt_at = None
             self.pending_ids.clear()  # nothing left to approve
+            self.task_ids.clear()     # the claude process (and its workers) exited
 
     def _classify_fin(self, cancel=False):
         """Terminal outcome of the turn ending now (Item 4): an API error
@@ -361,10 +378,16 @@ class Session:
         if os.path.isdir(base):
             for dirpath, _dirs, files in os.walk(base):
                 for fn in files:
-                    if fn.startswith("agent-") and fn.endswith(".jsonl"):
-                        if now - safe_mtime(os.path.join(dirpath, fn)) < \
-                                cfg.get("subagent_live_s", 90):
-                            n += 1
+                    if not (fn.startswith("agent-") and fn.endswith(".jsonl")):
+                        continue
+                    # compaction helpers are bookkeeping, not workers:
+                    # skip agentIds starting with "acompact" and any
+                    # transcript whose basename mentions compaction
+                    if fn[6:-6].startswith("acompact") or "compact" in fn:
+                        continue
+                    if now - safe_mtime(os.path.join(dirpath, fn)) < \
+                            cfg.get("subagent_live_s", 15):
+                        n += 1
         self._sa_count = n
         return n
 

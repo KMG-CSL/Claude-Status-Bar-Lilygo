@@ -194,5 +194,42 @@ class TestFindTranscripts(SessionCase):
         self.assertEqual(list(find_transcripts([self.tmp.name])), [keep])
 
 
+class TestSubagentLiveness(SessionCase):
+    """sa counts only subagents with events in the last subagent_live_s
+    (Stargx liveness, default 15); compaction helpers never count."""
+
+    def _with_subagents(self, files, now=T0):
+        s = self.make([user(T0), assistant_text(T0 + 1)])
+        base = os.path.join(
+            os.path.dirname(s.path),
+            os.path.splitext(os.path.basename(s.path))[0], "subagents")
+        os.makedirs(base)
+        for fn, age in files:
+            p = os.path.join(base, fn)
+            with open(p, "w") as f:
+                f.write("{}\n")
+            os.utime(p, (now - age, now - age))
+        return s
+
+    def test_only_recently_active_subagents_count(self):
+        s = self._with_subagents([("agent-a1.jsonl", 5),
+                                  ("agent-a2.jsonl", 14),
+                                  ("agent-a3.jsonl", 16),
+                                  ("agent-a4.jsonl", 120)])
+        self.assertEqual(s.subagent_count({"subagent_live_s": 15}, now=T0), 2)
+
+    def test_default_window_is_15s(self):
+        # was 90: a helper idle for 20s no longer counts as live
+        s = self._with_subagents([("agent-old.jsonl", 20),
+                                  ("agent-live.jsonl", 3)])
+        self.assertEqual(s.subagent_count({}, now=T0), 1)
+
+    def test_compact_helpers_never_count(self):
+        s = self._with_subagents([("agent-acompact123.jsonl", 1),
+                                  ("agent-precompact-x.jsonl", 1),
+                                  ("agent-real.jsonl", 1)])
+        self.assertEqual(s.subagent_count({"subagent_live_s": 15}, now=T0), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
