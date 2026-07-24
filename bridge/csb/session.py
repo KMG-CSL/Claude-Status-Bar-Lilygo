@@ -65,7 +65,15 @@ class Session:
         self.pending_ids = {}         # tool_use id -> (name, ts)
         self.limit_reset = 0.0        # unix epoch the rate limit lifts, 0 = none
         self.error = ""               # short API-error reason ("" = none)
-        self.done_latch = None  # sticky-done: (turn_start, frozen_el, armed_event_ts)
+        self.done_latch = None  # sticky-done: (turn_start, frozen_el, armed_event_ts, src)
+        # hook edges (Item 1) — authoritative transitions, trusted by the
+        # engine only while the session stays hook-fresh (hook_fresh_s)
+        self.hook_last = 0.0          # ts of the newest hook event (freshness)
+        self.turn_started_at = None   # UserPromptSubmit edge
+        self.turn_stopped_at = None   # Stop edge
+        self.perm_prompt_at = None    # armed latch: perm dialog / plan / question
+        self.session_started_at = None
+        self.session_ended_at = None
         self.first_seen = time.time()
 
     # ---- incremental parse ----
@@ -220,6 +228,60 @@ class Session:
             self.last_role = "assistant"
             self.last_event_ts = ts
 
+    # ---- hook edges (Item 1) ----
+    def apply_hook(self, ev):
+        """Record one hook event (parsed listener payload with arrival
+        "ts"). Edges are transitions, not states: derive() reads them at
+        packet time, and only while the session is hook-fresh.
+
+        perm_prompt_at is a latch, not a bare timestamp (§b): approving a
+        dialog / plan / question emits no UserPromptSubmit, so the latch
+        is explicitly cleared by PostToolUse (the prompted tool ran),
+        Stop, UserPromptSubmit and SessionStart here — and by any real
+        transcript activity after it, checked in the engine."""
+        ts = ev.get("ts") or time.time()
+        self.hook_last = max(self.hook_last, ts)
+        cwd = ev.get("cwd")
+        if cwd and not self.project:
+            # seeds the project label for eagerly-created sessions whose
+            # transcript may not even exist yet
+            self.project = os.path.basename(cwd.rstrip("/\\")) or cwd
+        name = ev.get("hook_event_name") or ""
+        if name == "UserPromptSubmit":
+            self.turn_started_at = ts
+            self.perm_prompt_at = None
+            self.done_latch = None    # a genuine new prompt releases sticky-done
+        elif name == "Stop":
+            self.turn_stopped_at = ts
+            self.perm_prompt_at = None
+            # the turn is over: still-unmatched tool_use ids were abandoned
+            # (Escape) and must not read as pending approval (fragile #5)
+            self.pending_ids.clear()
+        elif name == "PreToolUse":
+            # installer matcher is ExitPlanMode|AskUserQuestion; re-check
+            # here so a user-widened matcher can't arm the latch spuriously
+            if ev.get("tool_name") in ("ExitPlanMode", "AskUserQuestion"):
+                self.perm_prompt_at = ts
+        elif name == "Notification":
+            self.perm_prompt_at = ts  # permission_prompt matcher
+        elif name == "PostToolUse":
+            self.perm_prompt_at = None   # the prompted tool ran -> approved
+        elif name == "SubagentStop":
+            self._sa_checked = 0      # force a subagent re-count next read
+        elif name == "SessionStart":
+            # happy's stale-state reset: clear wait/sticky state inherited
+            # from the previous incarnation of this transcript
+            self.session_started_at = ts
+            self.perm_prompt_at = None
+            self.done_latch = None
+            self.pending_ids.clear()
+            self.turn_started_at = None
+            self.turn_stopped_at = None
+        elif name == "SessionEnd":
+            self.session_ended_at = ts
+            self.perm_prompt_at = None
+            self.pending_ids.clear()  # nothing left to approve
+
     # ---- derived state ----
     def mtime(self):
         return self._mtime_fn(self.path)
@@ -287,6 +349,7 @@ class Session:
             # API error IS actionable, so it keeps at=True.
             "at": st == "wait" and not state.lim,
             "lim": int(state.lim),      # additive field; old firmware ignores
+            "src": state.src,           # evidence tier: h hook / t transcript / m mtime
         }
 
 
