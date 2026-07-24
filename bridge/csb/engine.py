@@ -30,8 +30,12 @@ def derive(session, cfg, now=None):
 
 
 def _state(session, cfg, now):
-    mtime = session.mtime()
-    fresh = (now - mtime) < cfg["idle_after_s"]
+    # Real parsed events are the activity clock; mtime is only the fallback
+    # for transcripts that have produced no events yet. Noise records
+    # (file-history-snapshot & friends, skipped in session.py) bump mtime
+    # without meaning anything — Extra A.
+    activity = session.last_event_ts or session.mtime()
+    fresh = (now - activity) < cfg["idle_after_s"]
 
     pending = None
     if session.pending_ids:
@@ -45,17 +49,23 @@ def _state(session, cfg, now):
                     or session.subagent_count(cfg, now) > 0):
         return "tool", pending[0], pending[2]
 
+    if pending:
+        name, pts, detail = pending
+        # write-silence approval heuristic (Item 2): Claude Code writes
+        # nothing to the main transcript while a tool executes, so silence
+        # after a tool_use means execution *or* a permission prompt; the
+        # debounce keeps allowlisted long tools from flashing "approval".
+        silence = now - max(pts, activity)
+        if not fresh or silence > cfg["wait_tool_s"]:
+            return "wait", name, detail   # likely a permission prompt
+        return "tool", name, detail
+
     if fresh:
-        if pending:
-            name, pts, detail = pending
-            if now - pts > cfg["wait_tool_s"] and now - mtime > cfg["wait_tool_s"]:
-                return "wait", name, detail   # likely a permission prompt
-            return "tool", name, detail
         # no pending tools: if the last thing was an assistant message and
         # nothing new has been written for a while, the turn is over.
         # A message ending in "?" flips to wait on a shorter fuse.
         if session.last_role == "assistant":
-            quiet = now - mtime
+            quiet = now - activity
             asks = session.last_assistant_text.rstrip().endswith("?")
             if asks and quiet > cfg["question_after_s"]:
                 return "wait", "", ""
@@ -63,8 +73,6 @@ def _state(session, cfg, now):
                 return "done", "", ""
         return "run", "", ""
     # stale
-    if pending:
-        return "wait", pending[0], pending[2]
     if session.last_assistant_text.rstrip().endswith("?"):
         return "wait", "", ""
     if session.last_role == "assistant":

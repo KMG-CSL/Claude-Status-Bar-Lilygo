@@ -11,8 +11,9 @@ import unittest
 
 from csb.engine import derive
 
-from tests.helpers import (T0, assistant_text, assistant_tool_use, base_cfg,
-                           make_session, tool_result, user)
+from tests.helpers import (T0, append_jsonl, assistant_text,
+                           assistant_tool_use, base_cfg, make_session, noise,
+                           tool_result, user)
 
 
 class EngineCase(unittest.TestCase):
@@ -50,11 +51,23 @@ class TestPendingTool(EngineCase):
         r = self.at(s, T0 + 5 + 20.1)
         self.assertEqual((r.st, r.tl, r.td), ("wait", "Bash", "npm test"))
 
-    def test_wait_needs_mtime_quiet_too(self):
-        # tool_use is old but the file was written recently -> still tool
+    def test_real_event_resets_the_silence_clock(self):
+        # a real record after the tool_use restarts the debounce
         s = self._pending()
-        s.mclock.value = T0 + 5 + 15         # a later write bumped mtime
-        self.assertEqual(self.at(s, T0 + 5 + 21).st, "tool")
+        append_jsonl(s.path, [assistant_text(T0 + 15, text="progress note")])
+        s.poll([])
+        self.assertEqual(self.at(s, T0 + 15 + 19.9).st, "tool")
+        self.assertEqual(self.at(s, T0 + 15 + 20.1).st, "wait")
+
+    def test_noise_write_does_not_reset_the_silence_clock(self):
+        # noise records bump mtime and file size but are not activity —
+        # the approval flip must still happen on time (Extra A)
+        s = self._pending()
+        append_jsonl(s.path, [noise(T0 + 20, "file-history-snapshot")])
+        s.poll([])
+        s.mclock.value = T0 + 20              # the write also bumped mtime
+        r = self.at(s, T0 + 5 + 20.1)
+        self.assertEqual((r.st, r.tl), ("wait", "Bash"))
 
     def test_answered_tool_runs(self):
         s = self.make([user(T0), assistant_tool_use(T0 + 5, "Bash", "tu_1"),
@@ -118,6 +131,32 @@ class TestQuietAssistant(EngineCase):
     def test_user_spoke_last_is_run(self):
         s = self.make([user(T0)], mtime=T0)
         self.assertEqual(self.at(s, T0 + 60).st, "run")
+
+
+class TestNoiseSkip(EngineCase):
+    """Extra A at the engine level: noise-kept-alive transcripts must not
+    read as fresh — only real events count as activity."""
+
+    def test_noise_only_freshness_uses_mtime_fallback(self):
+        # a transcript with no real events falls back to mtime
+        s = self.make([], mtime=T0)
+        self.assertEqual(self.at(s, T0 + 300).st, "idle")
+
+    def test_noise_cannot_keep_a_session_fresh(self):
+        # real events ended at T0+1; noise keeps bumping mtime — the
+        # session still goes stale on the real-activity clock
+        for i, ntype in enumerate(("file-history-snapshot", "queue-operation",
+                                   "last-prompt", "attachment",
+                                   "bridge-session")):
+            s = self.make([user(T0), noise(T0 + 100, ntype)],
+                          mtime=T0 + 100, filename=f"noise-{i}.jsonl")
+            self.assertEqual(self.at(s, T0 + 130).st, "idle", ntype)
+
+    def test_noise_does_not_defer_done(self):
+        s = self.make([user(T0), assistant_text(T0 + 10, text="all done."),
+                       noise(T0 + 35, "file-history-snapshot")],
+                      mtime=T0 + 35)
+        self.assertEqual(self.at(s, T0 + 45).st, "done")   # quiet = 35 > 30
 
 
 class TestStale(EngineCase):

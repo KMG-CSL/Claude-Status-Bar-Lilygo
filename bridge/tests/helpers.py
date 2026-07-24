@@ -80,6 +80,12 @@ def write_jsonl(path, records):
             f.write(json.dumps(r) + "\n")
 
 
+def append_jsonl(path, records):
+    with open(path, "a", encoding="utf-8") as f:
+        for r in records:
+            f.write(json.dumps(r) + "\n")
+
+
 class MtimeClock:
     """Injectable mtime: tests move .value instead of touching files."""
 

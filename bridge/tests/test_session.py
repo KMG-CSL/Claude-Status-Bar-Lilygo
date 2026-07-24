@@ -101,11 +101,24 @@ class TestParserFacts(SessionCase):
         s = self.make([noise(T0, "file-history-snapshot"),
                        noise(T0 + 1, "queue-operation"),
                        noise(T0 + 2, "last-prompt"),
-                       noise(T0 + 3, "bridge-session")])
+                       noise(T0 + 3, "attachment"),
+                       noise(T0 + 4, "bridge-session")])
         self.assertIsNone(s.last_event_ts)
         self.assertIsNone(s.turn_start)
         self.assertEqual(s.model, "")
         self.assertEqual(s.last_role, "")
+
+    def test_noise_after_real_events_does_not_advance_activity(self):
+        s = self.make([user(T0), assistant_text(T0 + 5)])
+        write_jsonl(s.path, [user(T0), assistant_text(T0 + 5),
+                             noise(T0 + 50, "file-history-snapshot"),
+                             noise(T0 + 51, "queue-operation"),
+                             noise(T0 + 52, "last-prompt"),
+                             noise(T0 + 53, "attachment"),
+                             noise(T0 + 54, "bridge-session")])
+        s.poll([])
+        self.assertEqual(s.last_event_ts, T0 + 5)
+        self.assertEqual(s.last_role, "assistant")
 
     def test_non_json_lines_ignored(self):
         s = self.make([user(T0)])
@@ -169,6 +182,16 @@ class TestFindTranscripts(SessionCase):
         with open(os.path.join(self.tmp.name, "audit.jsonl"), "w") as f:
             f.write("{}\n")
         self.assertEqual(find_transcripts([self.tmp.name]), {})
+
+    def test_compact_basenames_skipped(self):
+        # compaction artifacts are not sessions (Stargx §6.1)
+        for fn in ("acompact-1234.jsonl", "pre-compact-save.jsonl"):
+            with open(os.path.join(self.tmp.name, fn), "w") as f:
+                f.write("{}\n")
+        keep = os.path.join(self.tmp.name, "real-session.jsonl")
+        with open(keep, "w") as f:
+            f.write("{}\n")
+        self.assertEqual(list(find_transcripts([self.tmp.name])), [keep])
 
 
 if __name__ == "__main__":

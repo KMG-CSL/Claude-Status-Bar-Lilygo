@@ -17,6 +17,19 @@ def safe_mtime(path):
         return 0
 
 
+# Bookkeeping records Claude Code appends without any real activity behind
+# them (Extra A, Stargx §6.1 + locally observed). They must never count as
+# activity: parsed for nothing, and they don't update last_event_ts — a
+# transcript receiving only these stays idle even though mtime is bumped.
+NOISE_TYPES = frozenset((
+    "file-history-snapshot",
+    "queue-operation",
+    "last-prompt",
+    "attachment",
+    "bridge-session",
+))
+
+
 class Session:
     def __init__(self, path, mtime_fn=None):
         self.path = path
@@ -74,6 +87,8 @@ class Session:
         except Exception:
             return
         rtype = rec.get("type", "")
+        if rtype in NOISE_TYPES:
+            return
         ts = parse_ts(rec.get("timestamp")) or time.time()
 
         if rtype == "summary":
@@ -237,7 +252,9 @@ def find_transcripts(roots):
             if "subagents" in dirs:
                 dirs.remove("subagents")   # helper agents aren't top-level sessions
             for fn in files:
-                if fn.endswith(".jsonl") and fn != "audit.jsonl":
+                # "compact" basenames are compaction artifacts, not sessions
+                if fn.endswith(".jsonl") and fn != "audit.jsonl" \
+                        and "compact" not in fn:
                     path = os.path.join(dirpath, fn)
                     try:
                         found[path] = os.path.getmtime(path)
