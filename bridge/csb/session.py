@@ -56,6 +56,7 @@ class Session:
         self.name = ""
         self.project = ""             # basename of the session's cwd
         self.cwd = ""                 # full cwd (KVM focus needs the real path)
+        self.claude_pid = 0           # exact PID from hook ppid (0 = unknown)
         self.entrypoint = ""          # "cli" interactive, "sdk-cli" = claude -p
         self.ai_title = ""            # Claude Code's generated session title
         self.custom_title = ""        # user-set title (wins over ai_title)
@@ -282,6 +283,9 @@ class Session:
 
     # ---- hook edges (Item 1) ----
     def apply_hook(self, ev):
+        if ev.get("ppid"):
+            # exact claude-PID binding from the hook's $PPID (KVM focus)
+            self.claude_pid = ev["ppid"]
         """Record one hook event (parsed listener payload with arrival
         "ts"). Edges are transitions, not states: derive() reads them at
         packet time, and only while the session is hook-fresh.

@@ -73,6 +73,36 @@ class FocusTtyCase(unittest.TestCase):
         self.assertIn("no-session", detail)
 
 
+class PpidBindingCase(unittest.TestCase):
+    def test_listener_parses_ppid_query(self):
+        from csb.hooks import HookListener
+        lis = HookListener()
+        H = lis._handler_class()
+
+        class Fake(H):
+            def __init__(self, path, body):
+                self.path = path
+                self.headers = {"Content-Length": str(len(body))}
+                import io
+                self.rfile = io.BytesIO(body)
+                self.sent = []
+                self.do_POST()
+
+            def send_response(self, code):
+                self.sent.append(code)
+
+            def end_headers(self):
+                pass
+
+        Fake('/hook?ppid=4242', b'{"session_id":"s1","hook_event_name":"Stop"}')
+        ev = lis.queue.get_nowait()
+        self.assertEqual(ev.get("ppid"), 4242)
+
+        Fake('/hook', b'{"session_id":"s2","hook_event_name":"Stop"}')
+        ev = lis.queue.get_nowait()
+        self.assertNotIn("ppid", ev)
+
+
 class DeviceLineCase(unittest.TestCase):
     def test_non_json_and_other_packets_ignored(self):
         from csb.core import BridgeCore

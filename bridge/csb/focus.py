@@ -100,7 +100,15 @@ def focus_slot(core, sl, runner=_run):
         log("focus", f"slot {sl}: no session/cwd resolved")
         return False
     t0 = time.time()
-    pids = claude_pids_by_cwd(ses.cwd, runner=runner)
+    pids = []
+    if ses.claude_pid:
+        try:                     # exact binding from hook ppid, if alive
+            os.kill(ses.claude_pid, 0)
+            pids = [str(ses.claude_pid)]
+        except (OSError, ProcessLookupError):
+            pass                 # stale pid: fall through to cwd scan
+    if not pids:
+        pids = claude_pids_by_cwd(ses.cwd, runner=runner)
     cwd = ses.cwd
     while not pids and cwd.count("/") > 2:
         # older transcripts may have recorded a subdirectory the shell

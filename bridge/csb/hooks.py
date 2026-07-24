@@ -17,6 +17,7 @@ import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlparse
 
 from .config import CLAUDE_DIR, data_dir, debug, load_config, log
 
@@ -96,6 +97,13 @@ class HookListener:
                 if isinstance(payload, dict):
                     ev = {k: payload.get(k) for k in PAYLOAD_FIELDS}
                     ev["ts"] = time.time()
+                    try:      # ?ppid=N -> the claude process that fired us
+                        q_str = urlparse(self.path).query
+                        ppid = parse_qs(q_str).get("ppid", [""])[0]
+                        if ppid.isdigit():
+                            ev["ppid"] = int(ppid)
+                    except Exception:
+                        pass
                     cwd = (ev.get("cwd") or "").rstrip("/\\")
                     if cwd.endswith(SELF_PROBE_CWD_SUFFIX):
                         debug("hooks", "self-probe event dropped")
@@ -145,8 +153,10 @@ def hook_command(port_file=None):
     gets /dev/null stdin under POSIX sh) then backgrounds the curl so
     Claude never blocks, even with the bridge down."""
     pf = resolved_port_file(port_file)
+    # ?ppid=$PPID: the hook shell's parent IS the claude process — exact
+    # session<->PID binding for KVM focus, no cwd guessing (kvm-design.md)
     return (MARKER + "(){ p=$(cat); (curl -s -m 2 -X POST "
-            f"\"http://127.0.0.1:$(cat '{pf}' 2>/dev/null)/hook\" "
+            f"\"http://127.0.0.1:$(cat '{pf}' 2>/dev/null)/hook?ppid=$PPID\" "
             "--data-binary \"$p\" >/dev/null 2>&1 &); }; " + MARKER)
 
 
