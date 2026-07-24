@@ -73,6 +73,7 @@ DEFAULT_CONFIG = {
     "wait_tool_s": 20,           # pending tool call older than this -> "waiting on you"
     "context_limit": 200000,
     "done_after_s": 30,              # no new events for this long -> turn is done
+    "question_after_s": 12,          # ...but a trailing "?" flips to wait this fast
     "est_cap_5h_tokens": 8000000,    # only used if OAuth usage API unavailable
     "est_cap_7d_tokens": 60000000,
     "send_interval_s": 1.0,
@@ -425,11 +426,15 @@ class Session:
                     return "wait", name, detail   # likely a permission prompt
                 return "tool", name, detail
             # no pending tools: if the last thing was an assistant message and
-            # nothing new has been written for a while, the turn is over
-            if self.last_role == "assistant" and now - mtime > cfg["done_after_s"]:
-                if self.last_assistant_text.rstrip().endswith("?"):
+            # nothing new has been written for a while, the turn is over.
+            # A message ending in "?" flips to wait on a shorter fuse.
+            if self.last_role == "assistant":
+                quiet = now - mtime
+                asks = self.last_assistant_text.rstrip().endswith("?")
+                if asks and quiet > cfg.get("question_after_s", 12):
                     return "wait", "", ""
-                return "done", "", ""
+                if quiet > cfg["done_after_s"]:
+                    return "done", "", ""
             return "run", "", ""
         # stale
         if pending:
@@ -462,10 +467,14 @@ class Session:
     def to_packet(self, cfg):
         st, tool, detail = self.state(cfg)
         el = 0
-        if self.turn_start:
-            end = self.last_event_ts or time.time()
+        now = time.time()
+        if st == "wait":
+            # show how long it's been waiting on the user, not turn length
+            el = max(0, int(now - (self.last_event_ts or now)))
+        elif self.turn_start:
+            end = self.last_event_ts or now
             if st in ("run", "tool"):
-                end = time.time()
+                end = now
             el = max(0, int(end - self.turn_start))
         # context window: per-model via the Models API, config as fallback;
         # if we've measured more tokens than the limit, it's clearly bigger
