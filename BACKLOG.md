@@ -76,6 +76,30 @@ numeric context joins row 5 on the right.
   need a degrade path. Left column is a contiguous portrait band (rows
   0-178), so partial pushes could hit ~20 fps there if ever needed.
 
+**2026-07-24 live-trial results (grid shipped to firmware same day):**
+- Desktop A/B verdict: control layout decisively rejected; grid and rollup
+  both strong, grid chosen and ported to the panel. Context gauge needs the
+  black inset track (colored bar directly on a green/orange cell fill is
+  unreadable; short-bar vs no-gauge ambiguous). Done in firmware.
+- **Decided — stable slot identity (KVM prerequisite):** a session keeps
+  its letter for its lifetime; freed letters are reused last. Assign slots
+  in the bridge; firmware renders what it's told. Observed live: hiring
+  session drifted B→A between packets — "long-press B" must never mean
+  someone else.
+- **Decided — capacity by curation, not smaller cells:** quadrant-size
+  cells are the floor. For >4 sessions: waiting/running always get cells,
+  idle/done collapse first (Stargx idle-dedup), "+N idle" overflow chip;
+  2x3 grid (~46px cells) only when >4 genuinely active. Wants to track
+  fleets of 5-8.
+- Field notes: cwd basename is weak identity (3 tabs all labeled "Brain";
+  custom rename fixed it — title fallback chain steal validated). Process
+  scan found all 5 live PIDs but 3 shared cwd ~/Brain — PID↔session
+  binding ambiguous without hooks (CodexBar's one-PID-per-cwd limit seen
+  live). Remote Control `bridge-session` + `last-prompt` tail records
+  observed in a stale transcript — Stargx noise-event skip list validated.
+- Flash-on-wait-edge: shipped in firmware (1.6s white blink), unjudged —
+  user hasn't caught one live yet.
+
 ## Second display / old-revision touch validation
 The AXS15231B (old hw revision) touch path in touch_drv.h is implemented from
 LilyGo's example but untested on real hardware. Flash display #2 when it

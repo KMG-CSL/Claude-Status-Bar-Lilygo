@@ -93,6 +93,7 @@ struct Sess {
 #define MAX_SES 8
 Sess ses[MAX_SES];
 int  nSes = 0, act = 0;
+uint32_t flashUntil[MAX_SES] = {0};   // wait-edge blink deadline per slot
 
 struct { int p5 = -1, p7 = -1; char r5[14] = ""; char r7[14] = ""; bool est = true; } usage;
 
@@ -294,11 +295,68 @@ static void drawHeader() {
 
 static void drawMessage(const char *title, const char *sub) {
   cv->fillScreen(C_BG);
+  if (hasLogo && logoBuf) cv->drawRGBBitmap(24, (CANVAS_H - LOGO_H) / 2,
+                                            logoBuf, LOGO_W, LOGO_H);
   cv->setFont(&FreeSansBold18pt7b);
   drawCentered(title, 0, CANVAS_W, 92, C_TEXT);
   cv->setFont(&FreeSans9pt7b);
   drawCentered(sub, 0, CANVAS_W, 130, C_DIM);
   drawHeader();
+}
+
+/* fleet minimap: one cell per session — letter, state color, context bar.
+ * Replaces the old logo + context column. */
+static void drawFleetGrid() {
+  const int x0 = 8, y0 = 20, x1 = 172, y1 = 166, gap = 4;
+  int cols = nSes <= 2 ? 1 : 2;
+  int rows = (nSes + cols - 1) / cols;
+  int cw = (x1 - x0 - gap * (cols - 1)) / cols;
+  int ch = (y1 - y0 - gap * (rows - 1)) / rows;
+  uint32_t now = millis();
+  bool blinkOn = (now / 400) % 2 == 0;
+
+  cv->setFont(NULL);
+  for (int i = 0; i < nSes; i++) {
+    int cx0 = x0 + (i % cols) * (cw + gap);
+    int cy0 = y0 + (i / cols) * (ch + gap);
+    uint16_t fill, fg;
+    const char *st = ses[i].st;
+    if      (!strcmp(st, "wait")) { fill = C_ORANGE; fg = C_BG; }
+    else if (!strcmp(st, "done")) { fill = C_GREEN;  fg = C_BG; }
+    else if (!strcmp(st, "run") ||
+             !strcmp(st, "tool")) { fill = C_PANEL;  fg = C_TEXT; }
+    else                          { fill = C_BAR_BG; fg = C_DIM; }
+    if (flashUntil[i] > now && blinkOn) { fill = C_TEXT; fg = C_BG; }
+
+    cv->fillRect(cx0, cy0, cw, ch, fill);
+    if (i == act) {
+      cv->drawRect(cx0, cy0, cw, ch, C_TEXT);
+      cv->drawRect(cx0 + 1, cy0 + 1, cw - 2, ch - 2, C_TEXT);
+    }
+    int ts = ch >= 30 ? 2 : 1;
+    cv->setTextSize(ts);
+    cv->setTextColor(fg);
+    cv->setCursor(cx0 + 6, cy0 + (ch - 8 * ts) / 2);
+    cv->write('A' + i);
+    if (cols == 1 && ses[i].pj[0]) {
+      cv->setTextSize(1);
+      cv->setCursor(cx0 + 6 + 14 * ts, cy0 + (ch - 8) / 2);
+      char b[22];
+      strlcpy(b, ses[i].pj, sizeof(b));
+      b[(cw - 14 * ts - 10) / 6] = 0;   // hard cap to cell width (6px/char)
+      cv->print(b);
+    }
+    // context gauge: black inset track (always drawn, so "low" reads as
+    // "short bar", not "missing"), colored fill on top for contrast on
+    // any cell color
+    int cxp = ses[i].cx;
+    if (cxp > 100) cxp = 100;
+    if (cxp < 0) cxp = 0;
+    cv->fillRect(cx0 + 2, cy0 + ch - 7, cw - 4, 5, C_BG);
+    int bw = (cw - 6) * cxp / 100;
+    if (bw > 0) cv->fillRect(cx0 + 3, cy0 + ch - 6, bw, 3, ctxColor(cxp));
+  }
+  cv->setTextSize(1);
 }
 
 static void drawStatusPage() {
@@ -311,37 +369,8 @@ static void drawStatusPage() {
   if (act >= nSes) act = 0;
   Sess &s = ses[act];
 
-  /* ----- left column: logo + context ----- */
-  if (hasLogo && logoBuf) {
-    cv->drawRGBBitmap(14, 12, logoBuf, LOGO_W, LOGO_H);
-  } else {
-    // no logo uploaded: small wordmark placeholder
-    cv->setFont(&FreeSansBold12pt7b);
-    cv->setTextColor(C_ORANGE);
-    cv->setCursor(12, 40);
-    cv->print("**");
-  }
-
-  cv->setFont(NULL); cv->setTextSize(1);
-  cv->setTextColor(C_DIM);
-  cv->setCursor(10, 112);
-  cv->print("CONTEXT");
-
-  char pct[8];
-  snprintf(pct, sizeof(pct), "%d%%", s.cx);
-  cv->setFont(&FreeSansBold18pt7b);
-  cv->setTextColor(ctxColor(s.cx));
-  cv->setCursor(10, 158);
-  cv->print(pct);
-
-  // raw context tokens under the % (so the % has a visible denominator story)
-  if (s.tk[0]) {
-    cv->setFont(NULL); cv->setTextSize(1);
-    cv->setTextColor(C_DIM);
-    cv->setCursor(10, 168);
-    cv->print(s.tk);
-  }
-
+  /* ----- left column: fleet minimap ----- */
+  drawFleetGrid();
   cv->drawFastVLine(178, 18, 148, C_PANEL);
 
   int zone0 = 196, zone1 = CANVAS_W - 10;
@@ -435,6 +464,17 @@ static void drawStatusPage() {
   cv->setCursor(x, yBase); cv->print(tib); x += textW(tib) + gap;
   drawDownTri(x, yBase - 9, C_ORANGE); x += icon;
   cv->setCursor(x, yBase); cv->print(tob);
+
+  // context % (was the left column's job), right-aligned; tokens as suffix
+  {
+    char cxb[20];
+    if (s.tk[0]) snprintf(cxb, sizeof(cxb), "%d%% · %s", s.cx, s.tk);
+    else         snprintf(cxb, sizeof(cxb), "%d%%", s.cx);
+    int16_t w2 = textW(cxb);
+    cv->setTextColor(ctxColor(s.cx));
+    cv->setCursor(zone1 - w2, yBase);
+    cv->print(cxb);
+  }
 
   drawHeader();
 }
@@ -625,10 +665,15 @@ static void handleLine(const char *line) {
     for (JsonObject o : arr) {
       if (n >= MAX_SES) break;
       Sess &s = ses[n];
+      bool hadSt   = s.st[0] != 0;
+      bool wasWait = !strcmp(s.st, "wait");
       strlcpy(s.pj, o["pj"] | "",      sizeof(s.pj));
       strlcpy(s.nm, o["nm"] | "",      sizeof(s.nm));
       strlcpy(s.md, o["md"] | "Claude", sizeof(s.md));
       strlcpy(s.st, o["st"] | "idle",  sizeof(s.st));
+      // wait-edge: blink this slot's minimap cell briefly
+      if (hadSt && !wasWait && !strcmp(s.st, "wait"))
+        flashUntil[n] = millis() + 1600;
       strlcpy(s.tl, o["tl"] | "",      sizeof(s.tl));
       strlcpy(s.td, o["td"] | "",      sizeof(s.td));
       strlcpy(s.ef, o["ef"] | "",      sizeof(s.ef));
@@ -811,6 +856,8 @@ void loop() {
   if (nSes > 0 && page == 0) {
     const char *st = ses[act].st;
     animating = (!strcmp(st, "run") || !strcmp(st, "tool"));
+    for (int i = 0; !animating && i < nSes; i++)
+      if (flashUntil[i] > now) animating = true;   // wait-edge blink
   }
   uint32_t interval = animating ? 150 : 500;
   if (dirty || now - lastDraw >= interval) {
