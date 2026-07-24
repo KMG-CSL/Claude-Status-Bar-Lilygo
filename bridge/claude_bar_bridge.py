@@ -33,36 +33,11 @@ from csb.config import (
 from csb.fmt import (
     fmt_countdown, fmt_tokens, parse_ts, pretty_model, pretty_tool, tool_detail,
 )
+from csb.core import BridgeCore, build_packet
 from csb.engine import LONG_TOOLS, StateResult, derive
 from csb.session import Session, find_transcripts, safe_mtime
 from csb.usage import UsageTracker, model_context_limit, oauth_token
 from csb.serial_link import SerialLink, send_logo
-
-
-def build_packet(sessions, cfg, usage, now=None):
-    if now is None:
-        now = time.time()
-    live = [s for s in sessions.values()
-            if now - s.mtime() < cfg["active_window_min"] * 60
-            and (s.model or s.turn_start)]
-    live.sort(key=lambda s: s.first_seen)
-    live = live[-cfg["max_sessions"]:]
-    states = [derive(s, cfg, now) for s in live]   # one derive per session
-    act = 0
-    if live:
-        # auto-follow: prefer a waiting session, else most recently active
-        waiting = [i for i, r in enumerate(states) if r.st == "wait"]
-        if waiting:
-            act = waiting[0]
-        else:
-            act = max(range(len(live)), key=lambda i: live[i].mtime())
-    return {
-        "t": "s",
-        "ses": [s.to_packet(cfg, now=now, state=r)
-                for s, r in zip(live, states)],
-        "act": act,
-        "us": usage.snapshot(),
-    }
 
 
 def demo_packets():
@@ -124,9 +99,6 @@ def main():
         return
 
     link = None if args.no_serial else SerialLink(cfg["port"], cfg["baud"])
-    usage = UsageTracker(cfg)
-    sessions = {}
-    last_rescan = 0
     last_ser = None   # send the logo once per (re)connect
     print("Claude Status Bar bridge running. Ctrl+C to stop.")
 
@@ -140,25 +112,9 @@ def main():
             time.sleep(1)
         return
 
+    core = BridgeCore(cfg)
     while True:
-        now = time.time()
-        if now - last_rescan > 15:
-            last_rescan = now
-            cutoff = now - 7 * 86400
-            for path, mtime in find_transcripts(cfg["roots"]).items():
-                if mtime > cutoff and path not in sessions:
-                    sessions[path] = Session(path)
-            # drop dead sessions
-            for path in list(sessions):
-                if not os.path.exists(path):
-                    del sessions[path]
-
-        new_usage = []
-        for s in sessions.values():
-            s.poll(new_usage)
-        usage.add_events(new_usage)
-
-        pkt = build_packet(sessions, cfg, usage)
+        pkt = core.step()
         line = json.dumps(pkt, separators=(",", ":")) + "\n"
         if link:
             link.send(line)

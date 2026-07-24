@@ -46,8 +46,7 @@ class BridgeThread(threading.Thread):
         super().__init__(daemon=True)
         self.cfg = bridge.load_config()
         self.link = bridge.SerialLink(self.cfg["port"], self.cfg["baud"])
-        self.usage = bridge.UsageTracker(self.cfg)
-        self.sessions = {}
+        self.core = bridge.BridgeCore(self.cfg)
         self.last_pkt = None
         self.connected = False
         self.logo_dirty = True   # send logo on next connect
@@ -79,25 +78,8 @@ class BridgeThread(threading.Thread):
         self._send_logo_clear()
 
     def run(self):
-        last_rescan = 0
         while not self._stop.is_set():
-            now = time.time()
-            if now - last_rescan > 15:
-                last_rescan = now
-                cutoff = now - 7 * 86400
-                for path, mtime in bridge.find_transcripts(self.cfg["roots"]).items():
-                    if mtime > cutoff and path not in self.sessions:
-                        self.sessions[path] = bridge.Session(path)
-                for path in list(self.sessions):
-                    if not os.path.exists(path):
-                        del self.sessions[path]
-
-            new_usage = []
-            for s in self.sessions.values():
-                s.poll(new_usage)
-            self.usage.add_events(new_usage)
-
-            pkt = bridge.build_packet(self.sessions, self.cfg, self.usage)
+            pkt = self.core.step()
             self.last_pkt = pkt
             line = json.dumps(pkt, separators=(",", ":")) + "\n"
             self.link.send(line)
