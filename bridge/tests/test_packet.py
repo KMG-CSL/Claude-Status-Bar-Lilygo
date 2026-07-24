@@ -52,6 +52,7 @@ class TestFieldContract(PacketCase):
 
         self.assertEqual(pkt["t"], "s")
         self.assertIsInstance(pkt["act"], int)
+        self.assertIsInstance(pkt["hid"], int)     # additive overflow count
         for k in US_KEYS:
             self.assertIn(k, pkt["us"])
         self.assertIsInstance(pkt["us"]["est"], bool)
@@ -133,6 +134,70 @@ class TestDisplayWindow(PacketCase):
         # oldest first_seen fell off; order is first_seen ascending
         self.assertEqual(pkt["ses"][0]["nm"], "task 1")
         self.assertEqual(pkt["ses"][-1]["nm"], "task 8")
+
+
+class TestCuration(PacketCase):
+    """Capacity by curation: wait first, then run/tool, then done, then
+    idle; only collapsed idle/done overflow is counted in hid."""
+
+    def wait_s(self, first_seen):     # pending Bash 39s -> wait at T0+40
+        return self.make([user(T0), assistant_tool_use(T0 + 1, "Bash",
+                                                       f"tu_{first_seen}")],
+                         mtime=T0 + 1, first_seen=first_seen)
+
+    def run_s(self, first_seen):      # fresh assistant, quiet < done_after_s
+        return self.make([user(T0), assistant_text(T0 + 35)],
+                         mtime=T0 + 35, first_seen=first_seen)
+
+    def done_s(self, first_seen):     # quiet > done_after_s
+        return self.make([user(T0), assistant_text(T0 + 1)],
+                         mtime=T0 + 1, first_seen=first_seen)
+
+    def idle_s(self, first_seen):     # stale, last=user
+        return self.make([user(T0 - 130)], mtime=T0 - 130,
+                         first_seen=first_seen)
+
+    def test_hid_zero_without_overflow(self):
+        pkt = self.build([self.run_s(T0)], T0 + 40)
+        self.assertEqual(pkt["hid"], 0)
+        self.assertEqual(self.build([], T0)["hid"], 0)
+
+    def test_wait_and_run_survive_idle_done_collapse(self):
+        self.cfg["max_sessions"] = 3
+        now = T0 + 40
+        ses = [self.idle_s(T0), self.done_s(T0 + 2), self.wait_s(T0 + 3),
+               self.run_s(T0 + 4), self.done_s(T0 + 5), self.wait_s(T0 + 6)]
+        pkt = self.build(ses, now)
+        # waits + run kept, first_seen order preserved
+        self.assertEqual([e["st"] for e in pkt["ses"]],
+                         ["wait", "run", "wait"])
+        self.assertEqual(pkt["hid"], 3)          # 2 done + 1 idle collapsed
+
+    def test_among_equals_newest_first_seen_stay(self):
+        self.cfg["max_sessions"] = 3
+        ses = [self.run_s(T0 + i) for i in range(5)]
+        for i, s in enumerate(ses):
+            s.name = f"r{i}"
+        pkt = self.build(ses, T0 + 40)
+        self.assertEqual([e["nm"] for e in pkt["ses"]], ["r2", "r3", "r4"])
+        self.assertEqual(pkt["hid"], 0)          # hidden runs are not idle/done
+
+    def test_done_outranks_idle(self):
+        self.cfg["max_sessions"] = 1
+        pkt = self.build([self.idle_s(T0), self.done_s(T0 + 1)], T0 + 40)
+        self.assertEqual([e["st"] for e in pkt["ses"]], ["done"])
+        self.assertEqual(pkt["hid"], 1)
+
+    def test_limited_wait_gets_a_cell_over_done(self):
+        self.cfg["max_sessions"] = 1
+        reset = int(T0 + 3600)
+        limited = self.make([user(T0),
+                             tool_result(T0 + 2, "tu_x",
+                                         content=f"limit reached|{reset}")],
+                            mtime=T0 + 2, first_seen=T0)
+        pkt = self.build([limited, self.done_s(T0 + 1)], T0 + 40)
+        self.assertEqual(pkt["ses"][0]["lim"], reset)
+        self.assertEqual(pkt["hid"], 1)
 
 
 class TestOrderingAndAct(PacketCase):

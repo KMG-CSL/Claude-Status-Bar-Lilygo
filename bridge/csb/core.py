@@ -33,13 +33,13 @@ def build_packet(sessions, cfg, usage, now=None, slots=None):
             if now - max(s.mtime(), s.hook_last) < cfg["active_window_min"] * 60
             and (s.model or s.turn_start or s.turn_started_at)]
     live.sort(key=lambda s: s.first_seen)
-    live = live[-cfg["max_sessions"]:]
     for s in live:
         try:                       # statusline captures feed derive + packet
             statusline.refresh(s, cfg, now=now)
         except Exception:
             pass
     states = [derive(s, cfg, now) for s in live]   # one derive per session
+    live, states, hid = _curate(live, states, cfg["max_sessions"])
     act = 0
     if live:
         # auto-follow: prefer a waiting session, else most recently active.
@@ -65,8 +65,31 @@ def build_packet(sessions, cfg, usage, now=None, slots=None):
         "t": "s",
         "ses": ses,
         "act": act,
+        "hid": hid,     # additive: hidden idle/done sessions beyond capacity
         "us": usage.snapshot(now=now),
     }
+
+
+# capacity by curation (BACKLOG minimap decision): when more sessions
+# qualify than max_sessions, needs-attention sessions always get a cell —
+# wait (incl. limited/error, which are wait on the wire) first, then
+# run/tool, then done, then idle. Among equals today's rule stands: the
+# newest first_seen stay. Only the collapsed idle/done overflow is
+# reported in "hid"; a wait/run session is never *silently* hidden (it
+# can only fall off if waits+runs alone exceed max_sessions).
+_ST_PRIORITY = {"wait": 0, "run": 1, "tool": 1, "done": 2, "idle": 3}
+
+
+def _curate(live, states, max_sessions):
+    """-> (live, states, hid) with ses[] order (first_seen) preserved."""
+    if len(live) <= max_sessions:
+        return live, states, 0
+    ranked = sorted(range(len(live)),
+                    key=lambda i: (_ST_PRIORITY.get(states[i].st, 3), -i))
+    keep = sorted(ranked[:max_sessions])           # back to first_seen order
+    hid = sum(1 for i in ranked[max_sessions:]
+              if states[i].st in ("idle", "done"))
+    return [live[i] for i in keep], [states[i] for i in keep], hid
 
 
 class BridgeCore:
