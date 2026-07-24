@@ -91,6 +91,18 @@ class TestFieldContract(PacketCase):
         self.assertLessEqual(len(e["pj"]), 20)
         self.assertLessEqual(len(e["nm"]), 56)
 
+    def test_pm_badge_on_the_wire(self):
+        for mode, wire in (("plan", "plan"), ("acceptEdits", "acceptEdits"),
+                           ("bypassPermissions", "bypassPermissions"),
+                           ("default", ""), ("superYolo", ""), (None, "")):
+            rec = user(T0)
+            if mode is not None:
+                rec["permissionMode"] = mode
+            s = self.make([rec, assistant_text(T0 + 1)],
+                          mtime=T0 + 1, first_seen=T0)
+            e = self.build([s], T0 + 5)["ses"][0]
+            self.assertEqual(e["pm"], wire, mode)
+
     def test_packet_matches_single_derive(self):
         # to_packet(state=...) and a fresh derive at the same now agree
         s = self.make([user(T0), assistant_tool_use(T0 + 1, "Bash", "tu_1")],

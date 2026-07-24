@@ -22,6 +22,10 @@ def safe_mtime(path):
 # them (Extra A, Stargx §6.1 + locally observed). They must never count as
 # activity: parsed for nothing, and they don't update last_event_ts — a
 # transcript receiving only these stays idle even though mtime is bumped.
+# permissionMode values worth a badge on the wire ("pm"); "default" and
+# anything unrecognized map to "" (Stargx badge steal)
+PM_MODES = frozenset(("plan", "acceptEdits", "bypassPermissions"))
+
 NOISE_TYPES = frozenset((
     "file-history-snapshot",
     "queue-operation",
@@ -72,6 +76,7 @@ class Session:
         # The orchestrator is done but workers are in flight — derive()
         # surfaces it as td="delegating · N agents" on done/idle tiles.
         self.task_ids = {}            # tool_use id -> name
+        self.permission_mode = ""     # newest permissionMode seen in the JSONL
         self.limit_reset = 0.0        # unix epoch the rate limit lifts, 0 = none
         self.error = ""               # short API-error reason ("" = none)
         # statusline capture (Item 3), populated by csb.statusline.refresh
@@ -157,6 +162,12 @@ class Session:
 
         if rec.get("isSidechain"):
             return
+
+        # permissionMode badge: newest value wins; sidechain records are
+        # already excluded (a subagent's mode is not the session's)
+        pm = rec.get("permissionMode")
+        if pm:
+            self.permission_mode = str(pm)
 
         msg = rec.get("message") or {}
         content = msg.get("content")
@@ -437,6 +448,10 @@ class Session:
             "lim": int(state.lim),      # additive field; old firmware ignores
             "src": state.src,           # evidence tier: h hook / t transcript / m mtime
             "fin": state.fin,           # turn outcome ok/fail/cancel, "" unless done
+            # permissionMode badge: only the three display-worthy modes go
+            # on the wire; default/unknown map to "" (nothing to badge)
+            "pm": (self.permission_mode
+                   if self.permission_mode in PM_MODES else ""),
         }
 
 

@@ -194,6 +194,24 @@ class TestFindTranscripts(SessionCase):
         self.assertEqual(list(find_transcripts([self.tmp.name])), [keep])
 
 
+class TestPermissionMode(SessionCase):
+    def test_newest_mode_wins(self):
+        s = self.make([dict(user(T0), permissionMode="plan"),
+                       dict(assistant_text(T0 + 1),
+                            permissionMode="acceptEdits")])
+        self.assertEqual(s.permission_mode, "acceptEdits")
+
+    def test_sidechain_mode_is_not_the_sessions(self):
+        s = self.make([dict(user(T0), permissionMode="plan"),
+                       sidechain(dict(assistant_text(T0 + 1),
+                                      permissionMode="bypassPermissions"))])
+        self.assertEqual(s.permission_mode, "plan")
+
+    def test_absent_mode_stays_empty(self):
+        s = self.make([user(T0), assistant_text(T0 + 1)])
+        self.assertEqual(s.permission_mode, "")
+
+
 class TestSubagentLiveness(SessionCase):
     """sa counts only subagents with events in the last subagent_live_s
     (Stargx liveness, default 15); compaction helpers never count."""
