@@ -1,0 +1,48 @@
+{
+  "hook_event_name": "Status",
+  "session_id": "b3c1a5e2-4f6d-4a2b-9c8e-0d7f13a9b2c4",
+  "transcript_path": "/home/u/.claude/projects/-home-u-projects-widget/b3c1a5e2-4f6d-4a2b-9c8e-0d7f13a9b2c4.jsonl",
+  "cwd": "/home/u/projects/widget",
+  "version": "2.1.119",
+  "model": {
+    "id": "claude-fable-5-20251101",
+    "display_name": "Fable 5"
+  },
+  "workspace": {
+    "current_dir": "/home/u/projects/widget",
+    "project_dir": "/home/u/projects/widget"
+  },
+  "output_style": {
+    "name": "default"
+  },
+  "effort": {
+    "level": "high"
+  },
+  "cost": {
+    "total_cost_usd": 1.2345,
+    "total_duration_ms": 654321,
+    "total_api_duration_ms": 123456,
+    "total_lines_added": 142,
+    "total_lines_removed": 37
+  },
+  "context_window": {
+    "used_percentage": 42.5,
+    "context_window_size": 200000,
+    "total_input_tokens": 85000
+  },
+  "rate_limits": {
+    "five_hour": {
+      "used_percentage": 34.2,
+      "resets_at": "2025-06-15T18:00:00Z"
+    },
+    "seven_day": {
+      "used_percentage": 61.9,
+      "resets_at": "2025-06-20T07:00:00Z"
+    },
+    "seven_day_opus": {
+      "used_percentage": 12.0,
+      "resets_at": "2025-06-20T07:00:00Z"
+    }
+  },
+  "exceeds_200k_tokens": false
+}

@@ -21,6 +21,9 @@
   "hook_port": 45732,
   "hook_port_file": "",
   "hook_fresh_s": 900,
+  "_statusline_comment": "statusline capture install is an explicit CLI step: python -m csb.statusline install",
+  "statusline_ttl_s": 600,
+  "statusline_dir": "",
   "_input_comment": "actions: cycle | page | usage | flip | none (pushed to display on connect)",
   "input": {
     "tap": "cycle",

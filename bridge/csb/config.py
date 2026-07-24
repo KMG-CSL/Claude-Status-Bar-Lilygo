@@ -81,6 +81,8 @@ DEFAULT_CONFIG = {
     "hook_port": 45732,              # preferred listener port (0 = pure auto)
     "hook_port_file": "",            # "" = data_dir()/hook-port
     "hook_fresh_s": 900,             # hook edges trusted while events this recent
+    "statusline_ttl_s": 600,         # statusline captures older than this are ignored
+    "statusline_dir": "",            # "" = data_dir()/statusline
     # input bindings, pushed to the display on connect. Actions:
     # "cycle" (next/prev session), "page" (toggle status/usage),
     # "usage" (alias of page), "flip" (rotate 180), "none"
