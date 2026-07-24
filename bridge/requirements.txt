@@ -1,0 +1,7 @@
+# Bridge runtime: this is the only hard dependency.
+pyserial
+
+# Optional, desktop app (claude_bar_app.py) extras:
+#   pillow   - logo conversion + preview
+#   pystray  - minimize to system tray
+# Install with: pip install pillow pystray
