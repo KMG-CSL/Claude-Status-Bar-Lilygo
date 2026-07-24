@@ -18,7 +18,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from .config import CLAUDE_DIR, data_dir, debug, log
+from .config import CLAUDE_DIR, data_dir, debug, load_config, log
 
 # Marker name inside every installed hook command: install/uninstall stay
 # idempotent string-contains checks (ClaudeBar / ccstatusline pattern),
@@ -126,13 +126,22 @@ class HookListener:
 
 # ---------------------------------------------------------------- installer
 
+def resolved_port_file(port_file=None):
+    """CLI-side port-file resolution: an explicit --port-file wins, else
+    the same load_config() the running bridge uses — so a hook_port_file
+    set in config.json or via CSB_HOOK_PORT_FILE ends up baked into the
+    installed hook command / read by `status`, matching where
+    HookListener actually writes its port."""
+    return port_file or default_port_file(load_config())
+
+
 def hook_command(port_file=None):
     """The settings.json hook command. Reads the port from the port file
     at hook run time ($(cat ...)) so bridge restarts on a different port
     keep working; reads stdin in the foreground (a backgrounded pipeline
     gets /dev/null stdin under POSIX sh) then backgrounds the curl so
     Claude never blocks, even with the bridge down."""
-    pf = port_file or default_port_file()
+    pf = resolved_port_file(port_file)
     return (MARKER + "(){ p=$(cat); (curl -s -m 2 -X POST "
             f"\"http://127.0.0.1:$(cat '{pf}' 2>/dev/null)/hook\" "
             "--data-binary \"$p\" >/dev/null 2>&1 &); }; " + MARKER)
@@ -273,7 +282,7 @@ def installed_events(settings_path):
     return sorted(out)
 
 
-def status(settings_path):
+def status(settings_path, port_file=None):
     if sys.platform == "win32":
         print("unsupported platform (hook command is POSIX-only)")
         return 0
@@ -283,7 +292,7 @@ def status(settings_path):
               + ", ".join(events))
     else:
         print(f"not installed in {settings_path}")
-    pf = default_port_file()
+    pf = resolved_port_file(port_file)
     try:
         with open(pf, "r", encoding="utf-8") as f:
             print(f"listener port {f.read().strip()} (port file {pf})")
@@ -302,14 +311,15 @@ def main(argv=None):
                     default=os.path.join(CLAUDE_DIR, "settings.json"),
                     help="settings.json path (default: %(default)s)")
     ap.add_argument("--port-file", default="",
-                    help="port file baked into the hook command "
-                         "(default: <data dir>/hook-port)")
+                    help="port file baked into the hook command (default: "
+                         "the bridge config's hook_port_file, else "
+                         "<data dir>/hook-port)")
     args = ap.parse_args(argv)
     if args.action == "install":
         return install(args.settings, port_file=args.port_file or None)
     if args.action == "uninstall":
         return uninstall(args.settings)
-    return status(args.settings)
+    return status(args.settings, port_file=args.port_file or None)
 
 
 if __name__ == "__main__":

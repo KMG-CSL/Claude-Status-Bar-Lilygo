@@ -9,6 +9,7 @@ settings.json, never ~/.claude.
 """
 
 import http.client
+import io
 import json
 import os
 import socket
@@ -16,6 +17,7 @@ import sys
 import tempfile
 import time
 import unittest
+from contextlib import redirect_stdout
 from unittest import mock
 
 from csb import hooks as hooks_mod
@@ -535,6 +537,51 @@ class TestInstaller(InstallerCase):
         rc = hooks_mod.main(["uninstall", "--settings", self.settings])
         self.assertEqual(rc, 0)
         self.assertEqual(hooks_mod.installed_events(self.settings), [])
+
+    def test_install_honors_configured_hook_port_file(self):
+        # a bridge configured with hook_port_file (config.json or
+        # CSB_HOOK_PORT_FILE) writes its port there — the installed hook
+        # command must read the SAME path, or every hook curls an empty
+        # port and the hook tier silently never activates
+        custom = os.path.join(self.tmp.name, "custom-port-file")
+        cfg_path = os.path.join(self.tmp.name, "config.json")
+        with open(cfg_path, "w", encoding="utf-8") as f:
+            json.dump({"hook_port_file": custom}, f)
+        with mock.patch.dict(os.environ, {"CSB_DATA_DIR": self.tmp.name}):
+            rc = hooks_mod.main(["install", "--settings", self.settings])
+        self.assertEqual(rc, 0)
+        cmd = json.loads(self.read())["hooks"]["Stop"][0]["hooks"][0]["command"]
+        self.assertIn(f"'{custom}'", cmd)
+        self.assertNotIn("/hook-port", cmd)      # not the ignored default
+
+    def test_install_honors_env_hook_port_file(self):
+        custom = os.path.join(self.tmp.name, "env-port-file")
+        env = {"CSB_DATA_DIR": self.tmp.name, "CSB_HOOK_PORT_FILE": custom}
+        with mock.patch.dict(os.environ, env):
+            rc = hooks_mod.main(["install", "--settings", self.settings])
+        self.assertEqual(rc, 0)
+        cmd = json.loads(self.read())["hooks"]["Stop"][0]["hooks"][0]["command"]
+        self.assertIn(f"'{custom}'", cmd)
+        # an explicit --port-file still beats the config
+        with mock.patch.dict(os.environ, env):
+            hooks_mod.main(["install", "--settings", self.settings,
+                            "--port-file", self.port_file])
+        cmd = json.loads(self.read())["hooks"]["Stop"][0]["hooks"][0]["command"]
+        self.assertIn(f"'{self.port_file}'", cmd)
+
+    def test_status_reads_configured_hook_port_file(self):
+        custom = os.path.join(self.tmp.name, "custom-port-file")
+        with open(custom, "w", encoding="utf-8") as f:
+            f.write("54321")
+        self.write_fixture({})
+        env = {"CSB_DATA_DIR": self.tmp.name, "CSB_HOOK_PORT_FILE": custom}
+        buf = io.StringIO()
+        with mock.patch.dict(os.environ, env), redirect_stdout(buf):
+            rc = hooks_mod.main(["status", "--settings", self.settings])
+        self.assertEqual(rc, 0)
+        out = buf.getvalue()
+        self.assertIn("listener port 54321", out)
+        self.assertIn(custom, out)
 
 
 if __name__ == "__main__":
