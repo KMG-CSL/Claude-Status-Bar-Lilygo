@@ -155,6 +155,10 @@ def base_cfg(**over):
     # a nonexistent path means "no captures" unless a test overrides it
     cfg["statusline_dir"] = os.path.join(
         tempfile.gettempdir(), "csb-tests-no-captures")
+    # likewise keep slot persistence out of the real data dir: the parent
+    # dir does not exist, so the allocator's writes no-op (in-memory)
+    cfg["slots_file"] = os.path.join(
+        tempfile.gettempdir(), "csb-tests-no-slots", "slots.json")
     cfg.update(over)
     return cfg
 

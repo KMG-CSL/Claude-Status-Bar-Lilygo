@@ -83,6 +83,7 @@ DEFAULT_CONFIG = {
     "hook_fresh_s": 900,             # hook edges trusted while events this recent
     "statusline_ttl_s": 600,         # statusline captures older than this are ignored
     "statusline_dir": "",            # "" = data_dir()/statusline
+    "slots_file": "",                # "" = data_dir()/slots.json (stable slot letters)
     # input bindings, pushed to the display on connect. Actions:
     # "cycle" (next/prev session), "page" (toggle status/usage),
     # "usage" (alias of page), "flip" (rotate 180), "none"

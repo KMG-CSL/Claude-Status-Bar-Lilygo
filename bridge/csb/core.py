@@ -12,15 +12,20 @@ from .engine import LONG_TOOLS, derive
 from .fmt import fmt_countdown
 from .limits import AlertLog, is_expired
 from .session import Session, find_transcripts
+from .slots import SlotAllocator
 from .usage import UsageTracker
 
 RESCAN_INTERVAL_S = 15
 DISCOVERY_WINDOW_S = 7 * 86400   # ignore transcripts older than a week
 
 
-def build_packet(sessions, cfg, usage, now=None):
+def build_packet(sessions, cfg, usage, now=None, slots=None):
     if now is None:
         now = time.time()
+    if slots is None:
+        # transient allocator: sl is still emitted (and stable within this
+        # allocator's life); BridgeCore passes its persistent one
+        slots = SlotAllocator(num_slots=max(8, cfg.get("max_sessions", 8)))
     # hook edges count as liveness/content too: an eagerly-created session
     # (UserPromptSubmit before the transcript file exists) must be visible
     # during its first turn (§c)
@@ -47,10 +52,18 @@ def build_packet(sessions, cfg, usage, now=None):
             act = waiting[0]
         else:
             act = max(range(len(live)), key=lambda i: live[i].mtime())
+    # stable slot identity (additive "sl"): assigned at first display,
+    # kept for the session's lifetime — ses[] order stays first_seen as
+    # today, sl is metadata for displays that want stable letters
+    slot_map = slots.assign([s.session_id for s in live], now=now)
+    ses = []
+    for s, r in zip(live, states):
+        e = s.to_packet(cfg, now=now, state=r)
+        e["sl"] = slot_map[s.session_id]
+        ses.append(e)
     return {
         "t": "s",
-        "ses": [s.to_packet(cfg, now=now, state=r)
-                for s, r in zip(live, states)],
+        "ses": ses,
         "act": act,
         "us": usage.snapshot(now=now),
     }
@@ -68,6 +81,9 @@ class BridgeCore:
         self.hook_queue = hook_queue   # queue.Queue of parsed hook events
         self.hooks = None           # HookListener once start_hooks() ran
         self._sid_map = {}          # session_id -> transcript path fallback
+        self.slots = SlotAllocator(
+            cfg.get("slots_file") or os.path.join(data_dir(), "slots.json"),
+            max(8, cfg.get("max_sessions", 8)))
 
     def start_hooks(self):
         """Start the localhost hook listener (Item 1). Called by the
@@ -124,7 +140,8 @@ class BridgeCore:
             session.apply_hook(ev)
         self.usage.add_events(new_usage)
         self._limit_alerts(now)
-        return build_packet(self.sessions, self.cfg, self.usage, now=now)
+        return build_packet(self.sessions, self.cfg, self.usage, now=now,
+                            slots=self.slots)
 
     def _drain_hooks(self, now):
         """-> [(session, event)] for every queued hook event. Events route

@@ -24,6 +24,8 @@
   "_statusline_comment": "statusline capture install is an explicit CLI step: python -m csb.statusline install",
   "statusline_ttl_s": 600,
   "statusline_dir": "",
+  "_slots_comment": "stable slot letters (ses.sl) persist here; \"\" = <data dir>/slots.json",
+  "slots_file": "",
   "_input_comment": "actions: cycle | page | usage | flip | none (pushed to display on connect)",
   "input": {
     "tap": "cycle",
