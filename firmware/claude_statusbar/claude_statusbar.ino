@@ -500,17 +500,25 @@ static void applyAction(uint8_t a, int dir, const char *src) {
  * The controller reports in portrait axes: x = short side (0..179),
  * y = long side (0..639). In landscape, a horizontal swipe is a y-run. */
 static void gestureFrom(const TouchSample &s) {
+  static uint32_t lastGesture = 0;
+  static bool originPending = false;
   uint32_t now = millis();
   if (s.down && !touching) {                 // finger down
     touching = true;
     holdFired = false;
     tX0 = tXl = s.x; tY0 = tYl = s.y;
+    originPending = (s.x == 0 && s.y == 0);  // first sample can be junk
     tDownAt = now;
   } else if (s.down && touching) {           // drag
+    if (originPending && (s.x || s.y)) {
+      tX0 = s.x; tY0 = s.y;
+      originPending = false;
+    }
     tXl = s.x; tYl = s.y;
     if (!holdFired && now - tDownAt > 600 &&
         abs(tYl - tY0) < 40 && abs(tXl - tX0) < 40) {
       holdFired = true;
+      lastGesture = now;
       applyAction(actHold, +1, "hold");
     }
   } else if (!s.down && touching) {          // finger up
@@ -521,15 +529,23 @@ static void gestureFrom(const TouchSample &s) {
     if (s.x || s.y) { tXl = s.x; tYl = s.y; }
     int dy = tYl - tY0;                      // landscape-horizontal travel
     uint32_t dt = now - tDownAt;
-    if (abs(dy) >= 80 && dt < 900) {
+    // cooldown: the chip emits phantom down/up pairs right after a lift,
+    // which would fire a bogus tap on top of the real swipe (jerkiness)
+    uint32_t sinceLast = now - lastGesture;
+    if (abs(dy) >= 80 && dt < 900 && !originPending && sinceLast > 300) {
       int dir = (dy < 0) ? +1 : -1;          // swipe toward connector = next
       if (flipped) dir = -dir;
+      lastGesture = now;
       Serial.printf("[touch] swipe %+d (dy=%d dt=%lu)\n",
                     dir, dy, (unsigned long)dt);
       applyAction(actSwipe, dir, "swipe");
-    } else if (dt < 350 && abs(dy) < 40) {
+    } else if (dt < 350 && dt >= 40 && abs(dy) < 40 && sinceLast > 450) {
+      lastGesture = now;
       Serial.printf("[touch] tap (dy=%d dt=%lu)\n", dy, (unsigned long)dt);
       applyAction(actTap, +1, "tap");
+    } else {
+      Serial.printf("[touch] ignored (dy=%d dt=%lu since=%lu)\n",
+                    dy, (unsigned long)dt, (unsigned long)sinceLast);
     }
   }
 }
