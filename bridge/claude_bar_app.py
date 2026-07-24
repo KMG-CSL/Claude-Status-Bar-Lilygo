@@ -20,7 +20,7 @@ import sys
 import threading
 import time
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import messagebox
 
 import claude_bar_bridge as bridge
 
@@ -124,7 +124,8 @@ class App:
                                 bg=BG, highlightthickness=1,
                                 highlightbackground="#333")
         self.canvas.pack(padx=14, pady=(14, 8))
-        self.canvas.bind("<Button-1>", lambda e: self.toggle_page())
+        self.canvas.bind("<Button-1>", self.on_click)
+        self._cell_hits = []          # (x0, y0, x1, y1, ses_index) per frame
         for k in ("1", "2", "3"):
             self.root.bind(k, self._set_variant)
         self.root.bind("f", self._toggle_flash)
@@ -137,8 +138,6 @@ class App:
                              fg="#ddd", activebackground="#333",
                              activeforeground="#fff", relief="flat", padx=10)
 
-        btn("Set logo...", self.pick_logo).pack(side="left", padx=(0, 6))
-        btn("Clear logo", self.clear_logo).pack(side="left", padx=(0, 6))
         btn("Switch page", self.toggle_page).pack(side="left", padx=(0, 6))
         btn("Minimize to tray", self.to_tray).pack(side="right")
 
@@ -157,63 +156,32 @@ class App:
         self.status_lbl.pack(side="right")
 
         self.root.protocol("WM_DELETE_WINDOW", self.to_tray)
-        self.load_logo_preview()
         self.tick()
         if start_in_tray:
             self.root.withdraw()
             self.make_tray()
 
-    # ---------------- logo ----------------
+    # ---------------- input ----------------
 
-    def load_logo_preview(self):
-        self.logo_img = None
-        if not os.path.exists(LOGO_BIN):
+    def on_click(self, ev):
+        """Minimap click = KVM: focus that session's terminal. Anywhere
+        else toggles the status/usage page (previous behavior)."""
+        pkt = self.bt.last_pkt
+        if self.page == 0 and ev.x < 178 and pkt and pkt.get("ses"):
+            idx = pkt.get("act", 0) % len(pkt["ses"])   # fallback: active
+            for (x0, y0, x1, y1, i) in self._cell_hits:
+                if x0 <= ev.x <= x1 and y0 <= ev.y <= y1:
+                    idx = i
+                    break
+            s = pkt["ses"][idx]
+            sl = s.get("sl", idx)
+            self.status_lbl.config(
+                text=f"focusing {chr(65 + sl)}: {s.get('pj', '?')}...")
+            threading.Thread(
+                target=self.bt.core.handle_device_line,
+                args=('{"t":"focus","sl":%d}' % sl,), daemon=True).start()
             return
-        try:
-            from PIL import Image, ImageTk
-            data = open(LOGO_BIN, "rb").read()
-            img = Image.new("RGB", (48, 48))
-            px = img.load()
-            for i in range(48 * 48):
-                v = int.from_bytes(data[i * 2:i * 2 + 2], "little")
-                px[i % 48, i // 48] = (((v >> 11) & 0x1F) << 3,
-                                       ((v >> 5) & 0x3F) << 2,
-                                       (v & 0x1F) << 3)
-            self.logo_img = ImageTk.PhotoImage(img)
-        except Exception:
-            pass
-
-    def pick_logo(self):
-        path = filedialog.askopenfilename(
-            title="Choose a logo image",
-            filetypes=[("Images", "*.jpg *.jpeg *.png *.bmp *.gif"),
-                       ("All files", "*.*")])
-        if not path:
-            return
-        try:
-            from PIL import Image
-        except ImportError:
-            messagebox.showerror("Missing library",
-                                 "Pillow not installed.\nRun: pip install pillow")
-            return
-        img = Image.open(path).convert("RGB")
-        w, h = img.size
-        side = min(w, h)
-        img = img.crop(((w - side) // 2, (h - side) // 2,
-                        (w + side) // 2, (h + side) // 2))
-        img = img.resize((48, 48), Image.LANCZOS)
-        data = bytearray()
-        for r, g, b in img.getdata():
-            v = ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3)
-            data += v.to_bytes(2, "little")
-        with open(LOGO_BIN, "wb") as f:
-            f.write(data)
-        self.load_logo_preview()
-        self.bt.send_logo_now()
-
-    def clear_logo(self):
-        self.bt.clear_logo()
-        self.load_logo_preview()
+        self.toggle_page()
 
     # ---------------- autostart ----------------
 
@@ -506,6 +474,7 @@ class App:
         from the stable slot field sl; hid>0 renders a "+N" overflow chip
         for the collapsed idle/done sessions."""
         c = self.canvas
+        self._cell_hits = []
         n = len(ses)
         x0, y0, x1, y1 = 8, 20, 172, 166
         cols = 1 if n <= 2 else 2
@@ -519,6 +488,7 @@ class App:
             cx0 = x0 + col * (cw + gap)
             cy0 = y0 + r * (ch + gap)
             fill, fg = self._cell_style(s, i, now)
+            self._cell_hits.append((cx0, cy0, cx0 + cw, cy0 + ch, i))
             c.create_rectangle(cx0, cy0, cx0 + cw, cy0 + ch, fill=fill,
                                outline=TEXT if i == act else "",
                                width=2 if i == act else 0)
