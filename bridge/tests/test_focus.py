@@ -75,8 +75,15 @@ class FocusTtyCase(unittest.TestCase):
 
 class PpidBindingCase(unittest.TestCase):
     def test_listener_parses_ppid_query(self):
+        import tempfile
         from csb.hooks import HookListener
-        lis = HookListener()
+        with tempfile.TemporaryDirectory() as td:
+            # port 0 + temp port file: NEVER touch the real bridge dir —
+            # a default-config listener here once clobbered the live
+            # hook-port file and silently severed real hook delivery
+            lis = HookListener({"hook_port": 0,
+                                "hook_port_file": td + "/hook-port"})
+            lis.server.shutdown()
         H = lis._handler_class()
 
         class Fake(H):

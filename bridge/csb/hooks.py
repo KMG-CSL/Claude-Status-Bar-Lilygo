@@ -85,6 +85,23 @@ class HookListener:
                                        name="csb-hooks", daemon=True)
         self.thread.start()
 
+    def assert_port_file(self):
+        """Self-heal: rewrite the port file if another process clobbered
+        it (observed live: a stray default-config listener silently broke
+        all hook delivery). Throttled; called from BridgeCore.step()."""
+        now = time.time()
+        if now - getattr(self, "_pf_checked", 0.0) < 15:
+            return
+        self._pf_checked = now
+        try:
+            with open(self.port_file, "r", encoding="utf-8") as f:
+                if f.read().strip() == str(self.port):
+                    return
+        except OSError:
+            pass
+        self._write_port_file()
+        log("hooks", f"port file re-asserted -> {self.port}")
+
     def _handler_class(self):
         q = self.queue
 

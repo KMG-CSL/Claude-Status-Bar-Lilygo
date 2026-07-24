@@ -175,6 +175,8 @@ class BridgeCore:
         if now is None:
             now = time.time()
         routed = self._drain_hooks(now)
+        if self.hooks is not None:
+            self.hooks.assert_port_file()
         if now - self._last_rescan > RESCAN_INTERVAL_S:
             self.rescan(now)
         new_usage = []
