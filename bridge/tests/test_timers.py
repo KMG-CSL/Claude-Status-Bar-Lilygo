@@ -173,6 +173,45 @@ class TestFin(TimerCase):
         r = self.at(s, T0 + 9)
         self.assertEqual((r.st, r.el, r.fin), ("done", 8, "cancel"))
 
+    def test_cancel_survives_late_assistant_flush(self):
+        # ordinary poll-vs-hook ordering: the Stop edge arrives over HTTP
+        # instantly, but an assistant record written just before it lands
+        # on the next poll tick. That flush must not release the latch
+        # and reclassify the hook-decided cancel to ok.
+        s = self.make([user(T0), assistant_tool_use(T0 + 5, "Bash", "tu_1")],
+                      mtime=T0 + 5)
+        self.hook(s, "UserPromptSubmit", T0)
+        self.hook(s, "Stop", T0 + 20)
+        r = self.at(s, T0 + 21)
+        self.assertEqual((r.st, r.el, r.fin), ("done", 20, "cancel"))
+        append_jsonl(s.path, [assistant_text(T0 + 19, text="partial")])
+        s.poll([])
+        r = self.at(s, T0 + 22)
+        self.assertEqual((r.st, r.el, r.fin), ("done", 20, "cancel"))
+
+    def test_cancel_survives_late_flush_after_session_end(self):
+        s = self.make([user(T0), assistant_tool_use(T0 + 5, "Bash", "tu_1")],
+                      mtime=T0 + 5)
+        self.hook(s, "UserPromptSubmit", T0)
+        self.hook(s, "SessionEnd", T0 + 30)
+        r = self.at(s, T0 + 31)
+        self.assertEqual((r.st, r.el, r.fin), ("done", 30, "cancel"))
+        append_jsonl(s.path, [assistant_text(T0 + 29, text="partial")])
+        s.poll([])
+        r = self.at(s, T0 + 32)
+        self.assertEqual((r.st, r.el, r.fin), ("done", 30, "cancel"))
+
+    def test_mid_turn_quiet_resumption_still_releases_the_latch(self):
+        # the guard is scoped to PRE-edge flushes: with no Stop edge
+        # (transcript-inferred done during mid-turn quiet) new assistant
+        # output is genuine resumption and must still break the latch
+        s = self.make([user(T0), assistant_text(T0 + 10, text="thinking")],
+                      mtime=T0 + 10)
+        self.assertEqual(self.at(s, T0 + 45).st, "done")   # latch armed
+        append_jsonl(s.path, [assistant_text(T0 + 50, text="one more thing")])
+        s.poll([])
+        self.assertEqual(self.at(s, T0 + 51).st, "run")
+
     def test_api_error_in_the_turn_is_fail(self):
         # transient error, turn recovers, then stops: the window still
         # carries the error record -> fail. Edges applied in real order

@@ -101,7 +101,13 @@ def _apply_sticky_done(session, st, tool, detail, src, now, hooky=False):
         so this is proof the turn never ended.
     A lone late tool_result flush sets last_role to "user" without moving
     turn_start or producing assistant output, so it stays masked — that
-    is the flicker this latch exists to kill. Rate-limit/error states
+    is the flicker this latch exists to kill. Likewise an assistant
+    record TIMESTAMPED BEFORE the Stop/SessionEnd edge is a late flush
+    of pre-stop work (hook edges arrive over HTTP instantly; transcript
+    records land on the next poll tick), not resumption — releasing on
+    it would rearm via _classify_fin(), which cannot reproduce a
+    hook-classified 'cancel' (pending_ids were cleared at the edge), so
+    it stays masked too. Rate-limit/error states
     bypass the latch by returning earlier in derive() — both are new
     information worth showing on a done tile. A computed WAIT also always
     releases the latch: an armed perm-prompt edge or a post-Stop trailing
@@ -113,7 +119,10 @@ def _apply_sticky_done(session, st, tool, detail, src, now, hooky=False):
             st == "wait"                           # waits are always news
             or latch[0] != session.turn_start      # real new prompt
             or (session.last_role == "assistant"
-                and session.last_event_ts != latch[2])):  # turn resumed
+                and session.last_event_ts != latch[2]      # turn resumed…
+                and not (session.turn_stopped_at           # …unless it is a
+                         and session.last_event_ts         # pre-edge flush
+                         <= session.turn_stopped_at))):
         session.done_latch = latch = None
         session.fin = ""      # released: the turn is not finished after all
     if latch is not None:
