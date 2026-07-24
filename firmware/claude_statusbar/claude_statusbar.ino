@@ -334,16 +334,30 @@ static void drawFleetGrid() {
       cv->drawRect(cx0 + 1, cy0 + 1, cw - 2, ch - 2, C_TEXT);
     }
     int ts = ch >= 30 ? 2 : 1;
+    bool twoLine = ch >= 52 && ses[i].nm[0];
+    int letterY = twoLine ? cy0 + 8 : cy0 + (ch - 8 * ts) / 2;
     cv->setTextSize(ts);
     cv->setTextColor(fg);
-    cv->setCursor(cx0 + 6, cy0 + (ch - 8 * ts) / 2);
+    cv->setCursor(cx0 + 6, letterY);
     cv->write('A' + i);
-    if (cols == 1 && ses[i].pj[0]) {
+    if (ses[i].pj[0]) {
+      // project label next to the letter, hard-capped to cell width
       cv->setTextSize(1);
-      cv->setCursor(cx0 + 6 + 14 * ts, cy0 + (ch - 8) / 2);
+      cv->setCursor(cx0 + 6 + 14 * ts, letterY + (8 * ts - 8) / 2);
       char b[22];
       strlcpy(b, ses[i].pj, sizeof(b));
-      b[(cw - 14 * ts - 10) / 6] = 0;   // hard cap to cell width (6px/char)
+      int maxc = (cw - 14 * ts - 10) / 6;
+      if (maxc >= 0 && maxc < (int)sizeof(b)) b[maxc] = 0;
+      cv->print(b);
+    }
+    if (twoLine) {
+      // session title on a second line, above the context gauge
+      cv->setTextSize(1);
+      cv->setCursor(cx0 + 6, cy0 + ch - 18);
+      char b[24];
+      strlcpy(b, ses[i].nm, sizeof(b));
+      int maxc = (cw - 10) / 6;
+      if (maxc >= 0 && maxc < (int)sizeof(b)) b[maxc] = 0;
       cv->print(b);
     }
     // context gauge: black inset track (always drawn, so "low" reads as
@@ -387,9 +401,16 @@ static void drawStatusPage() {
     cv->setCursor(zone1 - mw, 38);
     cv->print(mline);
 
-    const char *pj = s.pj[0] ? s.pj : (s.nm[0] ? s.nm : "Claude");
+    // session letter first — anchors the minimap letters to the big view
+    char lbuf[2] = { (char)('A' + act), 0 };
     cv->setFont(&FreeSansBold12pt7b);
-    printTruncated(pj, zone0, 40, zone1 - mw - 14, C_TEXT);
+    cv->setTextColor(C_ORANGE);
+    cv->setCursor(zone0, 40);
+    cv->print(lbuf);
+    int pjX = zone0 + textW(lbuf) + 10;
+
+    const char *pj = s.pj[0] ? s.pj : (s.nm[0] ? s.nm : "Claude");
+    printTruncated(pj, pjX, 40, zone1 - mw - 14, C_TEXT);
   }
 
   /* ----- row 2: session title (custom rename > ai-title) ----- */

@@ -414,8 +414,11 @@ class App:
 
         # center: project / title / state / detail
         z0 = 196
+        act_letter = chr(65 + pkt.get("act", 0) % len(pkt["ses"]))
+        c.create_text(z0, 32, text=act_letter, fill=ORANGE, anchor="w",
+                      font=("Segoe UI", 15, "bold"))
         pj = s.get("pj") or s.get("nm") or "Claude"
-        c.create_text(z0, 32, text=pj, fill=TEXT, anchor="w",
+        c.create_text(z0 + 26, 32, text=pj, fill=TEXT, anchor="w",
                       font=("Segoe UI", 15, "bold"))
         mline = s.get("md", "Claude")
         if s.get("ef"):
@@ -512,11 +515,16 @@ class App:
                                outline=TEXT if i == act else "",
                                width=2 if i == act else 0)
             size = 14 if ch >= 55 else (11 if ch >= 32 else 8)
-            c.create_text(cx0 + 7, cy0 + ch / 2 - 1, text=chr(65 + i),
+            two_line = ch >= 52 and s.get("nm")
+            ly = cy0 + 14 if two_line else cy0 + ch / 2 - 1
+            c.create_text(cx0 + 7, ly, text=chr(65 + i),
                           fill=fg, anchor="w", font=("Segoe UI", size, "bold"))
-            if cols == 1 and s.get("pj"):
-                c.create_text(cx0 + 30, cy0 + ch / 2 - 1, text=s["pj"][:12],
-                              fill=fg, anchor="w", font=("Segoe UI", 9))
+            if s.get("pj"):
+                c.create_text(cx0 + 12 + size, ly, text=s["pj"][:11],
+                              fill=fg, anchor="w", font=("Segoe UI", 8))
+            if two_line:
+                c.create_text(cx0 + 7, cy0 + ch - 15, text=s["nm"][:14],
+                              fill=fg, anchor="w", font=("Segoe UI", 8))
             cxp = min(s.get("cx", 0) or 0, 100)
             bw = (cw - 4) * cxp / 100
             if bw > 1:
