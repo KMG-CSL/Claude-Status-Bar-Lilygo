@@ -491,7 +491,10 @@ class TestInstaller(InstallerCase):
         for name, groups in cfg["hooks"].items():
             self.assertEqual(len(groups), 1)
             g = groups[0]
-            self.assertEqual(g["_tag"], "claudestatusbar")
+            # schema-clean: no custom keys that Claude Code might strip
+            self.assertNotIn("_tag", g)
+            self.assertEqual(sorted(g), sorted(
+                ["matcher", "hooks"] if "matcher" in g else ["hooks"]))
             cmd = g["hooks"][0]["command"]
             self.assertIn(hooks_mod.MARKER, cmd)
             self.assertIn(self.port_file, cmd)   # port read from port file

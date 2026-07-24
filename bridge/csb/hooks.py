@@ -23,7 +23,9 @@ from .config import CLAUDE_DIR, data_dir, debug, load_config, log
 
 # Marker name inside every installed hook command: install/uninstall stay
 # idempotent string-contains checks (ClaudeBar / ccstatusline pattern),
-# and entries additionally carry a "_tag" for clean structured removal.
+# and entries are recognized as ours by the MARKER in the command string
+# (no custom keys: Claude Code strips schema-foreign keys on rewrite;
+# "_tag" is still honored on removal for entries from older installs).
 MARKER = "__claudestatusbar_hook"
 TAG = "claudestatusbar"
 
@@ -245,7 +247,11 @@ def install(settings_path, port_file=None):
         if not isinstance(groups, list):
             log("hooks", f"skipping {event}: existing value is not a list")
             continue
-        entry = {"_tag": TAG}
+        # schema-clean entry: no custom keys. Claude Code rewrites
+        # settings.json at times (observed post-reboot 2026-07-24) and
+        # dropped groups carrying a foreign "_tag" key; ours are identified
+        # by the MARKER inside the command string instead.
+        entry = {}
         if matcher:
             entry["matcher"] = matcher
         entry["hooks"] = [{"type": "command", "command": cmd}]
