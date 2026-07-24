@@ -100,7 +100,22 @@ If you're logged into Claude Code, the bridge reads your **real** 5-hour/7-day u
 
 ## Configuration
 
-Copy `bridge\config.example.json` → `bridge\config.json`. Everything is optional: serial port override, context window size (set `1000000` for 1M-context plans), idle/wait timing thresholds, usage caps, extra transcript roots.
+Copy `bridge/config.example.json` → `bridge/config.json`. Everything is optional. The timing knobs control how eagerly the state machine flips between states — worth tuning to taste:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `port` | auto | Serial port override (e.g. `COM5`, `/dev/ttyACM0`) |
+| `max_sessions` | 8 | Sessions shown on the display (firmware cap: 8) |
+| `active_window_min` | 30 | Sessions with no transcript writes for longer than this drop off the display |
+| `idle_after_s` | 120 | Write-silence before a session is considered idle/stale (also the floor for noticing an escaped turn — transcripts are silent during long thinking, so this can't be much lower) |
+| `wait_tool_s` | 20 | A pending tool call older than this (with no writes) reads as a permission prompt → "Waiting on you" |
+| `done_after_s` | 30 | Write-silence after an assistant message before the turn reads as Done |
+| `question_after_s` | 12 | ...but if that message ends with "?", flip to "Waiting on you" this fast |
+| `context_limit` | 200000 | Fallback context window when the Models API is unreachable (per-model lookup is automatic) |
+| `est_cap_5h_tokens` / `est_cap_7d_tokens` | — | Usage-page caps when not logged into Claude Code |
+| `send_interval_s` | 1.0 | Serial update rate |
+| `input` | — | Gesture/button bindings, see [Controls](#controls) |
+| `roots` | auto | Extra transcript directories to watch |
 
 ## Troubleshooting
 
