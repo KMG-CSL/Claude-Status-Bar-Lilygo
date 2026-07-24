@@ -406,7 +406,8 @@ class App:
         cx = s.get("cx", 0)
         ctx_col = RED if cx >= 80 else (YELLOW if cx >= 50 else GREEN)
         if self.lhs_variant == 1:
-            self.draw_lhs_grid(pkt["ses"], pkt.get("act", 0) % len(pkt["ses"]))
+            self.draw_lhs_grid(pkt["ses"], pkt.get("act", 0) % len(pkt["ses"]),
+                               hid=pkt.get("hid", 0))
         elif self.lhs_variant == 2:
             self.draw_lhs_rollup(pkt["ses"])
         else:
@@ -415,7 +416,8 @@ class App:
 
         # center: project / title / state / detail
         z0 = 196
-        act_letter = chr(65 + pkt.get("act", 0) % len(pkt["ses"]))
+        # sl = bridge-assigned stable slot (falls back to display index)
+        act_letter = chr(65 + s.get("sl", pkt.get("act", 0) % len(pkt["ses"])))
         c.create_text(z0, 32, text=act_letter, fill=ORANGE, anchor="w",
                       font=("Segoe UI", 15, "bold"))
         pj = s.get("pj") or s.get("nm") or "Claude"
@@ -496,8 +498,10 @@ class App:
             fill, fg = TEXT, BG
         return fill, fg
 
-    def draw_lhs_grid(self, ses, act):
-        """Variant 1: fleet minimap — one cell per session."""
+    def draw_lhs_grid(self, ses, act, hid=0):
+        """Variant 1: fleet minimap — one cell per session; letters come
+        from the stable slot field sl; hid>0 renders a "+N" overflow chip
+        for the collapsed idle/done sessions."""
         c = self.canvas
         n = len(ses)
         x0, y0, x1, y1 = 8, 20, 172, 166
@@ -518,7 +522,7 @@ class App:
             size = 14 if ch >= 55 else (11 if ch >= 32 else 8)
             two_line = ch >= 52 and s.get("nm")
             ly = cy0 + 14 if two_line else cy0 + ch / 2 - 1
-            c.create_text(cx0 + 7, ly, text=chr(65 + i),
+            c.create_text(cx0 + 7, ly, text=chr(65 + s.get("sl", i)),
                           fill=fg, anchor="w", font=("Segoe UI", size, "bold"))
             if s.get("pj"):
                 c.create_text(cx0 + 12 + size, ly, text=s["pj"][:11],
@@ -532,6 +536,12 @@ class App:
                 bcol = RED if cxp >= 80 else (YELLOW if cxp >= 50 else GREEN)
                 c.create_rectangle(cx0 + 2, cy0 + ch - 4, cx0 + 2 + bw,
                                    cy0 + ch - 1, fill=bcol, outline="")
+        if hid:
+            # overflow chip: idle/done sessions collapsed by the bridge
+            c.create_rectangle(x1 - 30, y1 + 2, x1, y1 + 14,
+                               fill=BAR_BG, outline="")
+            c.create_text(x1 - 15, y1 + 8, text=f"+{hid}", fill=DIM,
+                          font=("Segoe UI", 8, "bold"))
 
     def draw_lhs_rollup(self, ses):
         """Variant 2: aggregate rollup — proportional state bands, no identity."""
