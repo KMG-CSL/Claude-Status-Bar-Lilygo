@@ -27,7 +27,8 @@ import time
 
 from csb.config import (
     APPDATA, CLAUDE_DIR, DEFAULT_CONFIG, HOME, IS_MAC, IS_WINDOWS,
-    LOCALAPPDATA, data_dir, default_roots, input_cfg_packet, load_config,
+    LOCALAPPDATA, data_dir, debug, default_roots, input_cfg_packet,
+    load_config, log,
 )
 from csb.fmt import (
     fmt_countdown, fmt_tokens, parse_ts, pretty_model, pretty_tool, tool_detail,

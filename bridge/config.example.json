@@ -11,6 +11,8 @@
   "est_cap_5h_tokens": 8000000,
   "est_cap_7d_tokens": 60000000,
   "send_interval_s": 1.0,
+  "subagent_live_s": 90,
+  "subagent_cache_s": 10,
   "_input_comment": "actions: cycle | page | usage | flip | none (pushed to display on connect)",
   "input": {
     "tap": "cycle",

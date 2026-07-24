@@ -1,9 +1,25 @@
-"""Config, data dir, and platform constants for the bridge."""
+"""Config, data dir, env overrides, logging, and platform constants."""
 
 import json
 import os
 import platform
 import sys
+from datetime import datetime
+
+
+def log(tag, msg):
+    """Timestamped line to stdout (12-factor: logs are an event stream)."""
+    print(f"[{datetime.now().isoformat(timespec='seconds')}] [{tag}] {msg}")
+
+
+def debug_enabled():
+    return os.environ.get("CSB_DEBUG", "") not in ("", "0")
+
+
+def debug(tag, msg):
+    """Diagnostics that are normally swallowed; CSB_DEBUG=1 unmutes them."""
+    if debug_enabled():
+        log(tag, msg)
 
 IS_WINDOWS = platform.system() == "Windows"
 IS_MAC = platform.system() == "Darwin"
@@ -56,6 +72,8 @@ DEFAULT_CONFIG = {
     "est_cap_5h_tokens": 8000000,    # only used if OAuth usage API unavailable
     "est_cap_7d_tokens": 60000000,
     "send_interval_s": 1.0,
+    "subagent_live_s": 90,           # subagent transcript counts as active this long
+    "subagent_cache_s": 10,          # how often to re-scan subagent dirs
     # input bindings, pushed to the display on connect. Actions:
     # "cycle" (next/prev session), "page" (toggle status/usage),
     # "usage" (alias of page), "flip" (rotate 180), "none"
@@ -71,7 +89,12 @@ DEFAULT_CONFIG = {
 
 def data_dir():
     """Where config.json / logo.bin live. Next to the scripts normally;
-    a per-user app-data dir when running as a packaged exe."""
+    a per-user app-data dir when running as a packaged exe.
+    CSB_DATA_DIR overrides both (and keeps tests out of the real dirs)."""
+    env = os.environ.get("CSB_DATA_DIR")
+    if env:
+        os.makedirs(env, exist_ok=True)
+        return env
     if getattr(sys, "frozen", False):
         if IS_WINDOWS:
             d = os.path.join(APPDATA, "ClaudeStatusBar")
@@ -86,19 +109,54 @@ def data_dir():
     return _BRIDGE_DIR
 
 
+def _coerce(raw):
+    """Env values keep config types: JSON if it parses, raw string if not."""
+    try:
+        return json.loads(raw)
+    except Exception:
+        return raw
+
+
+def _apply_env_overrides(cfg):
+    """CSB_<KEY> overrides any merged config key; CSB_INPUT_<KEY> the input
+    sub-keys. Returns [(env_name, value)] for startup logging."""
+    applied = []
+    for key in list(cfg):
+        if key == "input":
+            continue
+        raw = os.environ.get("CSB_" + key.upper())
+        if raw is not None:
+            cfg[key] = _coerce(raw)
+            applied.append(("CSB_" + key.upper(), cfg[key]))
+    for key in list(cfg.get("input") or {}):
+        raw = os.environ.get("CSB_INPUT_" + key.upper())
+        if raw is not None:
+            cfg["input"][key] = _coerce(raw)
+            applied.append(("CSB_INPUT_" + key.upper(), cfg["input"][key]))
+    return applied
+
+
 def load_config():
     cfg = dict(DEFAULT_CONFIG)
+    cfg["input"] = dict(DEFAULT_CONFIG["input"])
     path = os.path.join(data_dir(), "config.json")
     if os.path.exists(path):
         try:
             with open(path, "r", encoding="utf-8") as f:
                 user = json.load(f)
+            unknown = sorted(k for k in user
+                             if k not in DEFAULT_CONFIG and not k.startswith("_"))
+            if unknown:
+                log("warn", f"config.json has unknown keys (typo?): "
+                            f"{', '.join(unknown)}")
             inp = dict(DEFAULT_CONFIG["input"])
             inp.update(user.get("input") or {})
             cfg.update(user)
             cfg["input"] = inp
         except Exception as e:
-            print(f"[warn] bad config.json ignored: {e}")
+            log("warn", f"bad config.json ignored: {e}")
+    for name, val in _apply_env_overrides(cfg):
+        log("config", f"env override {name}={val!r}")
     return cfg
 
 
