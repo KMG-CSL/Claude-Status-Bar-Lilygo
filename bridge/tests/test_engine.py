@@ -246,8 +246,11 @@ class TestStale(EngineCase):
 
 
 class TestStickyDone(EngineCase):
-    """Extra B: once stopped, only a real user prompt may flip a session
-    back to running."""
+    """Extra B: once stopped, stale flushes must not flip a session back
+    to running — but genuine resumption (a new user prompt OR new
+    assistant output) must release the latch, because 'done' is only a
+    quiet-transcript heuristic and can arm mid-turn (extended thinking,
+    long generations, compaction)."""
 
     def _done(self):
         # user T0, tool turn, closing text at T0+10; done after T0+40
@@ -266,11 +269,51 @@ class TestStickyDone(EngineCase):
         r = self.at(s, T0 + 51)                    # would be "run" unlatched
         self.assertEqual((r.st, r.el), ("done", 10))
 
-    def test_late_assistant_flush_does_not_resume(self):
+    def test_assistant_text_resumption_releases_the_latch(self):
+        # new assistant output is proof the turn never ended: the tile
+        # must go back to run, then re-latch once truly quiet again
         s = self._done()
-        append_jsonl(s.path, [assistant_text(T0 + 50, text="ps: one more note")])
+        append_jsonl(s.path, [assistant_text(T0 + 50, text="ps: more to do")])
         s.poll([])
-        self.assertEqual(self.at(s, T0 + 52).st, "done")
+        self.assertEqual(self.at(s, T0 + 52).st, "run")
+        r = self.at(s, T0 + 85)                    # 35s quiet -> done again
+        self.assertEqual((r.st, r.el), ("done", 50))
+
+    def test_resumed_tool_execution_is_not_masked(self):
+        # latch armed by a mid-turn pause; the turn resumes with a Bash
+        # tool_use -> tool, and the approval-silence flip still fires
+        s = self._done()
+        append_jsonl(s.path, [assistant_tool_use(T0 + 50, "Bash", "tu_9")])
+        s.poll([])
+        r = self.at(s, T0 + 51)
+        self.assertEqual((r.st, r.tl), ("tool", "Bash"))
+        r = self.at(s, T0 + 50 + 20.1)             # 20s tool silence
+        self.assertEqual((r.st, r.tl), ("wait", "Bash"))
+
+    def test_ask_user_question_after_latch_is_not_masked(self):
+        s = self._done()
+        append_jsonl(s.path, [assistant_tool_use(
+            T0 + 50, "AskUserQuestion", "tu_q",
+            {"questions": [{"question": "Ship it?"}]})])
+        s.poll([])
+        r = self.at(s, T0 + 50.5)
+        self.assertEqual((r.st, r.tl, r.td), ("wait", "Question", "Ship it?"))
+
+    def test_trailing_question_after_latch_is_not_masked(self):
+        s = self._done()
+        append_jsonl(s.path, [assistant_text(T0 + 50, text="should I deploy?")])
+        s.poll([])
+        self.assertEqual(self.at(s, T0 + 50 + 12.1).st, "wait")
+
+    def test_resumed_tool_turn_keeps_running_after_result(self):
+        # full mid-turn sequence: latch, tool runs, result lands, the
+        # assistant keeps working -> run, not a frozen done
+        s = self._done()
+        append_jsonl(s.path, [assistant_tool_use(T0 + 50, "Bash", "tu_9"),
+                              tool_result(T0 + 55, "tu_9"),
+                              assistant_text(T0 + 60, text="still working")])
+        s.poll([])
+        self.assertEqual(self.at(s, T0 + 61).st, "run")
 
     def test_summary_and_noise_do_not_resume(self):
         s = self._done()

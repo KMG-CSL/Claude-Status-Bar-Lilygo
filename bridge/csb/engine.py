@@ -52,21 +52,36 @@ def derive(session, cfg, now=None):
 
 def _apply_sticky_done(session, st, tool, detail, now):
     """Sticky-done (Extra B, ccm file-store.ts:129-136): once a session
-    reports done, only a genuine new user prompt may flip it back to
-    running — late PostToolUse flushes, summary records and noise events
-    must not cause done->run flicker. The latch keys on turn_start, which
-    only a real (non-tool_result, non-noise) user record moves; it also
+    reports done, late PostToolUse flushes, summary records and noise
+    events must not cause done->run flicker. The latch keys on turn_start
+    (which only a real, non-tool_result, non-noise user record moves) and
     freezes el so the finished-turn duration can't drift under late
-    writes. Rate-limit/error states bypass the latch by returning earlier
-    in derive() — both are new information worth showing on a done tile."""
+    writes.
+
+    "done" is a heuristic (done_after_s of transcript quiet), and mid-turn
+    quiet is routine — extended thinking, long generations, compaction —
+    so the latch can arm during a live turn. It therefore releases on
+    EITHER kind of genuine resumption:
+      * a moved turn_start (real new user prompt), or
+      * new assistant output after arming (tool_use, questions, text) —
+        the model only writes assistant records while actually working,
+        so this is proof the turn never ended.
+    A lone late tool_result flush sets last_role to "user" without moving
+    turn_start or producing assistant output, so it stays masked — that
+    is the flicker this latch exists to kill. Rate-limit/error states
+    bypass the latch by returning earlier in derive() — both are new
+    information worth showing on a done tile."""
     latch = session.done_latch
-    if latch is not None and latch[0] != session.turn_start:
-        session.done_latch = latch = None      # a real new prompt arrived
+    if latch is not None and (
+            latch[0] != session.turn_start         # real new prompt
+            or (session.last_role == "assistant"
+                and session.last_event_ts != latch[2])):  # turn resumed
+        session.done_latch = latch = None
     if latch is not None:
         return StateResult("done", "", "", latch[1])
     el = _elapsed(session, st, now)
     if st == "done":
-        session.done_latch = (session.turn_start, el)
+        session.done_latch = (session.turn_start, el, session.last_event_ts)
     return StateResult(st, tool, detail, el)
 
 
