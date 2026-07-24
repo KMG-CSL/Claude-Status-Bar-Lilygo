@@ -225,6 +225,10 @@ def find_transcripts(roots):
     # os.walk (not glob) — transcripts live inside hidden ".claude" folders,
     # which glob's ** refuses to enter. Skip audit logs (encrypted, not
     # transcripts).
+    if isinstance(roots, str):
+        # Guard for direct callers: iterating a bare string yields characters,
+        # and os.path.isdir("/") is True — that walks the entire filesystem.
+        roots = [roots]
     found = {}
     for root in roots:
         if not os.path.isdir(root):

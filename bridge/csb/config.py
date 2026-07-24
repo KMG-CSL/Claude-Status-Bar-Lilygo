@@ -117,6 +117,20 @@ def _coerce(raw):
         return raw
 
 
+def _normalize_roots(roots):
+    """Accept the natural single-path forms for "roots" — a plain string
+    (optionally os.pathsep-separated, PATH-style) — as well as the canonical
+    list. Without this, iterating a bare string yields single characters and
+    os.walk("/") scans the whole filesystem."""
+    if isinstance(roots, str):
+        return [p for p in (s.strip() for s in roots.split(os.pathsep)) if p]
+    if isinstance(roots, list):
+        return [str(p) for p in roots]
+    log("warn", f"config 'roots' must be a path or list of paths, "
+                f"got {type(roots).__name__}; using defaults")
+    return list(DEFAULT_CONFIG["roots"])
+
+
 def _apply_env_overrides(cfg):
     """CSB_<KEY> overrides any merged config key; CSB_INPUT_<KEY> the input
     sub-keys. Returns [(env_name, value)] for startup logging."""
@@ -157,6 +171,7 @@ def load_config():
             log("warn", f"bad config.json ignored: {e}")
     for name, val in _apply_env_overrides(cfg):
         log("config", f"env override {name}={val!r}")
+    cfg["roots"] = _normalize_roots(cfg["roots"])
     return cfg
 
 

@@ -117,6 +117,29 @@ class TestEnvOverrides(EnvCase):
         os.environ["CSB_ROOTS"] = json.dumps(["/a", "/b"])
         self.assertEqual(self._load_quiet()["roots"], ["/a", "/b"])
 
+    def test_plain_string_roots_becomes_list(self):
+        # The natural single-root usage: CSB_ROOTS=/some/path (no JSON).
+        # Must NOT stay a str, or find_transcripts iterates it char-by-char
+        # and walks "/" (the entire filesystem).
+        os.environ["CSB_ROOTS"] = "/some/path"
+        self.assertEqual(self._load_quiet()["roots"], ["/some/path"])
+
+    def test_pathsep_separated_roots(self):
+        os.environ["CSB_ROOTS"] = os.pathsep.join(["/a", "/b"])
+        self.assertEqual(self._load_quiet()["roots"], ["/a", "/b"])
+
+    def test_string_roots_in_config_file(self):
+        self.write_cfg({"roots": "/some/path"})
+        self.assertEqual(self._load_quiet()["roots"], ["/some/path"])
+
+    def test_non_list_non_string_roots_falls_back_to_defaults(self):
+        os.environ["CSB_ROOTS"] = "42"   # json-parses to int
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            cfg = load_config()
+        self.assertEqual(cfg["roots"], DEFAULT_CONFIG["roots"])
+        self.assertIn("roots", out.getvalue())
+
     def test_input_subkey(self):
         os.environ["CSB_INPUT_TAP"] = "flip"
         cfg = self._load_quiet()

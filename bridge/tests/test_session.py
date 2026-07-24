@@ -6,7 +6,7 @@ import os
 import tempfile
 import unittest
 
-from csb.session import Session
+from csb.session import Session, find_transcripts
 
 from tests.helpers import (T0, assistant_text, assistant_tool_use, iso,
                            make_session, noise, sidechain, summary,
@@ -152,6 +152,23 @@ class TestTailing(SessionCase):
         self.assertEqual(s.last_role, "assistant")        # tail was parsed
         self.assertEqual(s.turn_start, T0)
         self.assertEqual(s.offset, os.path.getsize(path))
+
+
+class TestFindTranscripts(SessionCase):
+    def test_string_root_treated_as_single_path(self):
+        # A bare-string root must not be iterated char-by-char ("/" is a
+        # directory -> whole-filesystem walk). It should behave like [root].
+        path = os.path.join(self.tmp.name, "a.jsonl")
+        with open(path, "w") as f:
+            f.write("{}\n")
+        found = find_transcripts(self.tmp.name)
+        self.assertEqual(list(found), [path])
+        self.assertEqual(found, find_transcripts([self.tmp.name]))
+
+    def test_audit_jsonl_skipped(self):
+        with open(os.path.join(self.tmp.name, "audit.jsonl"), "w") as f:
+            f.write("{}\n")
+        self.assertEqual(find_transcripts([self.tmp.name]), {})
 
 
 if __name__ == "__main__":
