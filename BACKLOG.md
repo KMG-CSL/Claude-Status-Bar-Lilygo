@@ -35,9 +35,16 @@ Sessions that ended on a question age out of the 30-min display window and
 vanish — arguably the ones most worth remembering. Ideas: dim orange count on
 the usage page, or extend the window for wait-state sessions only.
 
+## "Done + N subagents" — bug or feature? (decide after ecosystem survey)
+Observed live: main session shows Done while 6 workflow subagents run in the
+background. Technically true (the turn ended, the user CAN reply) but "Done"
+undersells that work is still in flight. Candidate treatments: a distinct
+state word ("Delegating" / "N agents working"), keep Done but make the
+subagent count more prominent, or promote it to a distinct color. Deferred
+until we see how other projects (octomux kanban states, dashboards from the
+overnight survey) model "idle orchestrator, busy workers".
+
 ## Small polish
-- "Done + N subagents" wording (maybe "finishing up") when background agents
-  outlive the turn.
 - Desktop app preview parity with the redesigned firmware layout (rows drift).
 - Waiting-escalation: flash/tint after a session waits > N minutes.
 - Swipe direction sanity check when the display is flipped 180°.
