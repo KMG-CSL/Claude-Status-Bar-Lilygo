@@ -45,8 +45,11 @@ HOOK_MATCHERS = (
     ("Notification", "permission_prompt"),
 )
 
+# "message" is kept so the session layer can tell a permission prompt
+# from the ~60s idle nag if Claude Code ever delivers Notification events
+# that the installed "permission_prompt" matcher did not filter.
 PAYLOAD_FIELDS = ("session_id", "transcript_path", "cwd",
-                  "hook_event_name", "tool_name")
+                  "hook_event_name", "tool_name", "message")
 
 
 def default_port_file(cfg=None):

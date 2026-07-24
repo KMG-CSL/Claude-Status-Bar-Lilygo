@@ -263,7 +263,17 @@ class Session:
             if ev.get("tool_name") in ("ExitPlanMode", "AskUserQuestion"):
                 self.perm_prompt_at = ts
         elif name == "Notification":
-            self.perm_prompt_at = ts  # permission_prompt matcher
+            # The hook is installed with matcher "permission_prompt", but
+            # matcher filtering is only documented for tool events — if
+            # Claude Code delivers ALL notifications, the ~60s idle nag
+            # ("Claude is waiting for your input") would flip every
+            # finished tile to wait + attention. Guard on the payload
+            # message: the idle nag never arms the latch; permission
+            # prompts — and payloads with no message field, which a
+            # honored matcher implies were permission prompts — do.
+            msg = (ev.get("message") or "").lower()
+            if "waiting for your input" not in msg:
+                self.perm_prompt_at = ts
         elif name == "PostToolUse":
             self.perm_prompt_at = None   # the prompted tool ran -> approved
         elif name == "SubagentStop":

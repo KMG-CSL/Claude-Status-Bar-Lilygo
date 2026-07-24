@@ -103,12 +103,12 @@ def hook_payload(name, transcript_path, session_id="sid-1",
 
 
 def hook_event(name, ts, transcript_path="", session_id="sid-1",
-               cwd="/home/u/projects/widget", tool_name=None):
+               cwd="/home/u/projects/widget", tool_name=None, message=None):
     """Parsed listener event (what the queue carries) with an injected
     arrival ts, for driving Session.apply_hook on a fake clock."""
     return {"hook_event_name": name, "session_id": session_id,
             "transcript_path": transcript_path, "cwd": cwd,
-            "tool_name": tool_name, "ts": ts}
+            "tool_name": tool_name, "message": message, "ts": ts}
 
 
 # ---- session / cfg builders ------------------------------------------------

@@ -101,7 +101,11 @@ class TestListener(ListenerCase):
             self.assertEqual(e["session_id"], "sid-1")
             self.assertEqual(e["cwd"], "/home/u/projects/widget")
             self.assertIn("tool_name", e)
+            self.assertIn("message", e)          # kept for the idle-nag guard
             self.assertIsInstance(e["ts"], float)
+        notif = [e for e in got if e["hook_event_name"] == "Notification"][0]
+        self.assertEqual(notif["message"],
+                         "Claude needs your permission to use Bash")
 
     def test_bad_json_is_ignored_and_does_not_wedge(self):
         self.assertEqual(self.post(None, raw=b"this is not json"), 204)
@@ -178,6 +182,24 @@ class TestPipeline(PipelineCase):
                             assistant_text(p + 1, text="ran fine")])
         e = self.entry(self.core.step(), path)
         self.assertEqual(e["st"], "run")
+
+    def test_idle_notification_never_flips_a_done_tile(self):
+        # ~60s after a finished turn Claude Code fires Notification with
+        # "Claude is waiting for your input"; if matcher filtering does
+        # not apply to Notification events, this reaches us — it must NOT
+        # arm the perm-prompt latch (done tile -> wait + attention banner)
+        t = time.time()
+        path = self.transcript([user(t - 100),
+                                assistant_text(t - 70, text="all done.")])
+        self.post(hook_payload("UserPromptSubmit", path, prompt="go"))
+        self.post(hook_payload("Stop", path))
+        e = self.entry(self.core.step(), path)
+        self.assertEqual(e["st"], "done")
+        self.post(hook_payload("Notification", path,
+                               message="Claude is waiting for your input"))
+        e = self.entry(self.core.step(), path)
+        self.assertEqual(e["st"], "done")
+        self.assertIsNone(self.core.sessions[path].perm_prompt_at)
 
     def test_pre_tool_use_plan_approval_then_post_tool_use(self):
         t = time.time()
@@ -326,6 +348,30 @@ class TestPermPromptLatch(EngineHookCase):
                                 transcript_path=s.path))
         r = self.at(s, T0 + 6.5)                 # sub-second, no debounce
         self.assertEqual((r.st, r.tl, r.src), ("wait", "Bash", "h"))
+
+    def test_notification_permission_message_arms(self):
+        s = self._pending()
+        s.apply_hook(hook_event(
+            "Notification", T0 + 6, transcript_path=s.path,
+            message="Claude needs your permission to use Bash"))
+        r = self.at(s, T0 + 6.5)
+        self.assertEqual((r.st, r.tl, r.src), ("wait", "Bash", "h"))
+
+    def test_notification_idle_nag_does_not_arm(self):
+        # a finished, quiet turn; the ~60s "waiting for your input" nag
+        # must not arm the latch (it would read as st=wait with at=True)
+        s = self.make([user(T0), assistant_text(T0 + 10, text="all done.")],
+                      mtime=T0 + 10)
+        s.apply_hook(hook_event("UserPromptSubmit", T0,
+                                transcript_path=s.path))
+        s.apply_hook(hook_event("Stop", T0 + 11, transcript_path=s.path))
+        self.assertEqual(self.at(s, T0 + 12).st, "done")
+        s.apply_hook(hook_event("Notification", T0 + 71,
+                                transcript_path=s.path,
+                                message="Claude is waiting for your input"))
+        self.assertIsNone(s.perm_prompt_at)
+        r = self.at(s, T0 + 72)
+        self.assertEqual(r.st, "done")
 
     def test_pre_tool_use_matcher_tools_arm(self):
         for tool in ("ExitPlanMode", "AskUserQuestion"):
