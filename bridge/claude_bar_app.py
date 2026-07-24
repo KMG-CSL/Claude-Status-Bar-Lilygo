@@ -6,10 +6,10 @@ Runs the bridge with a UI: live preview of what the hardware display shows,
 logo uploader, serial status, minimize-to-system-tray, and a
 start-with-Windows toggle.
 
-    python claude_bar_app.py           # windowed
-    python claude_bar_app.py --tray    # start minimized to tray
+    python claude_bar_app.py           # (--tray is accepted and ignored,
+                                       #  kept for old autostart shortcuts)
 
-Requires: pip install pyserial pillow pystray
+Requires: pip install pyserial
 """
 
 import json
@@ -102,11 +102,10 @@ class BridgeThread(threading.Thread):
 class App:
     W, H = 640, 180
 
-    def __init__(self, start_in_tray=False):
+    def __init__(self, start_in_tray=False):   # param kept for old shortcuts
         self.bt = BridgeThread()
         self.bt.start()
         self.page = 0
-        self.tray_icon = None
         self.logo_img = None
 
         # LHS A/B experiment (keys 1/2/3 switch, f toggles wait-edge flash)
@@ -138,8 +137,7 @@ class App:
                              fg="#ddd", activebackground="#333",
                              activeforeground="#fff", relief="flat", padx=10)
 
-        btn("Switch page", self.toggle_page).pack(side="left", padx=(0, 6))
-        btn("Minimize to tray", self.to_tray).pack(side="right")
+        btn("Usage", self.toggle_page).pack(side="left", padx=(0, 6))
 
         opts = tk.Frame(self.root, bg="#111318")
         opts.pack(fill="x", padx=14, pady=(0, 8))
@@ -155,20 +153,43 @@ class App:
         self.status_lbl = tk.Label(opts, text="", bg="#111318", fg="#888")
         self.status_lbl.pack(side="right")
 
-        self.root.protocol("WM_DELETE_WINDOW", self.to_tray)
+        self.root.protocol("WM_DELETE_WINDOW", self.quit_app)
+        self.root.bind("<Left>", lambda e: self.cycle(-1))
+        self.root.bind("<Right>", lambda e: self.cycle(+1))
+        self._act_local = None        # manual session pick (arrow/click)
+        self._last_pkt_act = None
         self.tick()
-        if start_in_tray:
-            self.root.withdraw()
-            self.make_tray()
 
     # ---------------- input ----------------
 
-    def on_click(self, ev):
-        """Minimap click = KVM: focus that session's terminal. Anywhere
-        else toggles the status/usage page (previous behavior)."""
+    def eff_act(self, pkt):
+        """Effective active session: a manual pick (arrows / right-side
+        click) is surrendered whenever the bridge's own pick CHANGES —
+        the firmware's exact auto-follow rule."""
+        n = len(pkt["ses"])
+        pa = pkt.get("act", 0) % n
+        if pa != self._last_pkt_act:
+            self._last_pkt_act = pa
+            self._act_local = None
+        return pa if self._act_local is None else self._act_local % n
+
+    def cycle(self, d=1):
         pkt = self.bt.last_pkt
-        if self.page == 0 and ev.x < 178 and pkt and pkt.get("ses"):
-            idx = pkt.get("act", 0) % len(pkt["ses"])   # fallback: active
+        if pkt and pkt.get("ses"):
+            self._act_local = (self.eff_act(pkt) + d) % len(pkt["ses"])
+            self.draw()
+
+    def on_click(self, ev):
+        """Minimap cell click = KVM focus that terminal. Right side click
+        = cycle sessions (the panel's tap). Usage page click = back."""
+        pkt = self.bt.last_pkt
+        if self.page == 1:
+            self.toggle_page()
+            return
+        if not (pkt and pkt.get("ses")):
+            return
+        if ev.x < 178:
+            idx = self.eff_act(pkt)                     # fallback: active
             for (x0, y0, x1, y1, i) in self._cell_hits:
                 if x0 <= ev.x <= x1 and y0 <= ev.y <= y1:
                     idx = i
@@ -181,7 +202,7 @@ class App:
                 target=self.bt.core.handle_device_line,
                 args=('{"t":"focus","sl":%d}' % sl,), daemon=True).start()
             return
-        self.toggle_page()
+        self.cycle(+1)
 
     # ---------------- autostart ----------------
 
@@ -256,43 +277,7 @@ class App:
         except Exception as e:
             messagebox.showerror("Autostart", str(e))
 
-    # ---------------- tray ----------------
-
-    def make_tray(self):
-        if self.tray_icon:
-            return
-        try:
-            import pystray
-            from PIL import Image, ImageDraw
-        except ImportError:
-            messagebox.showinfo(
-                "Tray support",
-                "Install tray support with:\n\npip install pystray pillow\n\n"
-                "Window will minimize normally instead.")
-            self.root.iconify()
-            self.root.deiconify()
-            return
-        img = Image.new("RGB", (64, 64), "#1a1a1a")
-        d = ImageDraw.Draw(img)
-        d.polygon([(32, 8), (40, 26), (58, 32), (40, 38), (32, 56),
-                   (24, 38), (6, 32), (24, 26)], fill="#cb6a44")
-        menu = pystray.Menu(
-            pystray.MenuItem("Show", self.from_tray, default=True),
-            pystray.MenuItem("Quit", self.quit_app))
-        self.tray_icon = pystray.Icon("ClaudeStatusBar", img,
-                                      "Claude Status Bar", menu)
-        self.tray_icon.run_detached()
-
-    def to_tray(self):
-        self.root.withdraw()
-        self.make_tray()
-
-    def from_tray(self, *_):
-        self.root.after(0, self.root.deiconify)
-
     def quit_app(self, *_):
-        if self.tray_icon:
-            self.tray_icon.stop()
         self.bt.stop()
         self.root.after(0, self.root.destroy)
 
@@ -371,14 +356,14 @@ class App:
 
     def draw_status(self, pkt):
         c = self.canvas
-        s = pkt["ses"][pkt.get("act", 0) % len(pkt["ses"])]
+        eff = self.eff_act(pkt)
+        s = pkt["ses"][eff]
 
         # left column — A/B experiment variants (keys 1/2/3)
         cx = s.get("cx", 0)
         ctx_col = RED if cx >= 80 else (YELLOW if cx >= 50 else GREEN)
         if self.lhs_variant == 1:
-            self.draw_lhs_grid(pkt["ses"], pkt.get("act", 0) % len(pkt["ses"]),
-                               hid=pkt.get("hid", 0))
+            self.draw_lhs_grid(pkt["ses"], eff, hid=pkt.get("hid", 0))
         elif self.lhs_variant == 2:
             self.draw_lhs_rollup(pkt["ses"])
         else:
@@ -388,7 +373,7 @@ class App:
         # center: project / title / state / detail
         z0 = 196
         # sl = bridge-assigned stable slot (falls back to display index)
-        act_letter = chr(65 + s.get("sl", pkt.get("act", 0) % len(pkt["ses"])))
+        act_letter = chr(65 + s.get("sl", eff))
         c.create_text(z0, 32, text=act_letter, fill=ORANGE, anchor="w",
                       font=("Segoe UI", 15, "bold"))
         pj = s.get("pj") or s.get("nm") or "Claude"
