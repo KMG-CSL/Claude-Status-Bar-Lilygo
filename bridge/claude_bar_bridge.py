@@ -125,7 +125,7 @@ def main():
         else:
             sys.stdout.write(line)
             sys.stdout.flush()
-        time.sleep(cfg["send_interval_s"])
+        time.sleep(core.next_interval())
 
 
 if __name__ == "__main__":

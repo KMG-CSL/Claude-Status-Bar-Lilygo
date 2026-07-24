@@ -88,6 +88,20 @@ class TestLoadConfig(EnvCase):
         self.assertIn("wait_tool_z", out.getvalue())
         self.assertEqual(cfg["wait_tool_z"], 5)   # warning only, no drop
 
+    def test_approval_silence_default(self):
+        cfg = load_config()
+        self.assertEqual(cfg["approval_silence_s"], 20)
+        self.assertEqual(cfg["approval_confirm_s"], 0.5)
+
+    def test_legacy_wait_tool_s_feeds_approval_silence(self):
+        # a user who tuned wait_tool_s before the rename keeps their debounce
+        self.write_cfg({"wait_tool_s": 7})
+        self.assertEqual(load_config()["approval_silence_s"], 7)
+
+    def test_explicit_approval_silence_beats_legacy(self):
+        self.write_cfg({"wait_tool_s": 7, "approval_silence_s": 3.5})
+        self.assertEqual(load_config()["approval_silence_s"], 3.5)
+
     def test_underscore_keys_are_comment_exempt(self):
         self.write_cfg({"_comment": "hi"})
         out = io.StringIO()
@@ -108,6 +122,10 @@ class TestEnvOverrides(EnvCase):
     def test_float_coercion(self):
         os.environ["CSB_SEND_INTERVAL_S"] = "0.25"
         self.assertEqual(self._load_quiet()["send_interval_s"], 0.25)
+
+    def test_approval_silence_env_override(self):
+        os.environ["CSB_APPROVAL_SILENCE_S"] = "3.5"
+        self.assertEqual(self._load_quiet()["approval_silence_s"], 3.5)
 
     def test_non_json_stays_string(self):
         os.environ["CSB_PORT"] = "COM7"

@@ -64,8 +64,10 @@ DEFAULT_CONFIG = {
     "baud": 115200,
     "max_sessions": 8,
     "active_window_min": 30,     # sessions modified within N minutes are shown
-    "idle_after_s": 120,         # no file writes for this long -> idle/done
-    "wait_tool_s": 20,           # pending tool call older than this -> "waiting on you"
+    "idle_after_s": 120,         # no real events for this long -> idle/done
+    "wait_tool_s": 20,           # legacy alias of approval_silence_s (kept for old configs)
+    "approval_silence_s": 20,    # pending tool + this much write-silence -> "needs approval"
+    "approval_confirm_s": 0.5,   # poll cadence while within 1s of the approval flip
     "context_limit": 200000,
     "done_after_s": 30,              # no new events for this long -> turn is done
     "question_after_s": 12,          # ...but a trailing "?" flips to wait this fast
@@ -167,6 +169,10 @@ def load_config():
             inp.update(user.get("input") or {})
             cfg.update(user)
             cfg["input"] = inp
+            # honor a user-tuned legacy wait_tool_s as the approval debounce
+            # unless the new key was set explicitly
+            if "wait_tool_s" in user and "approval_silence_s" not in user:
+                cfg["approval_silence_s"] = user["wait_tool_s"]
         except Exception as e:
             log("warn", f"bad config.json ignored: {e}")
     for name, val in _apply_env_overrides(cfg):

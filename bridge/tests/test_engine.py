@@ -84,6 +84,56 @@ class TestPendingTool(EngineCase):
         self.assertEqual((r.st, r.tl), ("tool", "Bash"))
 
 
+class TestApprovalDebounceTunable(EngineCase):
+    """Item 2: the write-silence debounce is a config knob."""
+
+    def _pending(self):
+        return self.make([user(T0), assistant_tool_use(T0 + 5, "Bash", "tu_1")],
+                         mtime=T0 + 5)
+
+    def test_shorter_debounce_flips_sooner(self):
+        self.cfg["approval_silence_s"] = 3.5
+        s = self._pending()
+        self.assertEqual(self.at(s, T0 + 5 + 3.4).st, "tool")
+        r = self.at(s, T0 + 5 + 3.6)
+        self.assertEqual((r.st, r.tl, r.td), ("wait", "Bash", "npm test"))
+
+    def test_wait_tool_s_is_the_fallback_knob(self):
+        del self.cfg["approval_silence_s"]
+        self.cfg["wait_tool_s"] = 5
+        s = self._pending()
+        self.assertEqual(self.at(s, T0 + 5 + 4.9).st, "tool")
+        self.assertEqual(self.at(s, T0 + 5 + 5.1).st, "wait")
+
+    def test_fast_tool_result_never_flickers(self):
+        # result lands well inside the debounce -> never shows wait
+        s = self.make([user(T0), assistant_tool_use(T0 + 5, "Bash", "tu_1"),
+                       tool_result(T0 + 6, "tu_1")], mtime=T0 + 6)
+        for dt in (0.1, 5, 19, 25):
+            self.assertEqual(self.at(s, T0 + 6 + dt).st, "run", dt)
+
+    def test_wait_clears_within_a_packet_of_the_result(self):
+        # flip happened; the approval's tool_result clears it on next derive
+        s = self._pending()
+        self.assertEqual(self.at(s, T0 + 26).st, "wait")
+        append_jsonl(s.path, [tool_result(T0 + 26.5, "tu_1")])
+        s.poll([])
+        self.assertEqual(self.at(s, T0 + 27).st, "run")
+
+    def test_confirm_cadence_near_the_flip(self):
+        from csb.core import BridgeCore
+        from tests.helpers import stub_usage
+        cfg = base_cfg(roots=[self.tmp.name])
+        core = BridgeCore(cfg, usage=stub_usage(cfg))
+        s = self._pending()
+        core.sessions[s.path] = s
+        pts = T0 + 5
+        self.assertEqual(core.next_interval(pts + 5), 1.0)     # far from flip
+        self.assertEqual(core.next_interval(pts + 19.2), 0.5)  # within 1s
+        self.assertEqual(core.next_interval(pts + 20.9), 0.5)  # just past
+        self.assertEqual(core.next_interval(pts + 30), 1.0)    # flip settled
+
+
 class TestSpecialTools(EngineCase):
     def test_ask_user_question_waits_instantly(self):
         s = self.make([user(T0),

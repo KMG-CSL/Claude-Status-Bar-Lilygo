@@ -56,7 +56,8 @@ def _state(session, cfg, now):
         # after a tool_use means execution *or* a permission prompt; the
         # debounce keeps allowlisted long tools from flashing "approval".
         silence = now - max(pts, activity)
-        if not fresh or silence > cfg["wait_tool_s"]:
+        thr = cfg.get("approval_silence_s", cfg.get("wait_tool_s", 20))
+        if not fresh or silence > thr:
             return "wait", name, detail   # likely a permission prompt
         return "tool", name, detail
 

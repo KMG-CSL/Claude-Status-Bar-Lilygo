@@ -5,7 +5,7 @@ Transport (serial vs stdout) stays with the caller."""
 import os
 import time
 
-from .engine import derive
+from .engine import LONG_TOOLS, derive
 from .session import Session, find_transcripts
 from .usage import UsageTracker
 
@@ -72,3 +72,22 @@ class BridgeCore:
             s.poll(new_usage)
         self.usage.add_events(new_usage)
         return build_packet(self.sessions, self.cfg, self.usage, now=now)
+
+    def next_interval(self, now=None):
+        """Sleep hint for the caller loop: tighten to approval_confirm_s
+        while any session is within 1s of the write-silence approval flip
+        (Item 2's confirm cadence), else the normal send interval."""
+        if now is None:
+            now = time.time()
+        base = self.cfg.get("send_interval_s", 1.0)
+        confirm = self.cfg.get("approval_confirm_s", 0.5)
+        thr = self.cfg.get("approval_silence_s",
+                           self.cfg.get("wait_tool_s", 20))
+        for s in self.sessions.values():
+            for name, pts, _detail in s.pending_ids.values():
+                if name in LONG_TOOLS or name == "AskUserQuestion":
+                    continue
+                silence = now - max(pts, s.last_event_ts or pts)
+                if abs(silence - thr) <= 1.0:
+                    return min(base, confirm)
+        return base

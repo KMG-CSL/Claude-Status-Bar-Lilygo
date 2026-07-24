@@ -91,7 +91,7 @@ class BridgeThread(threading.Thread):
                 self._last_ser = self.link.ser
                 self.logo_dirty = False
                 self._send_logo()
-            time.sleep(self.cfg["send_interval_s"])
+            time.sleep(self.core.next_interval())
 
     def stop(self):
         self._stop.set()
