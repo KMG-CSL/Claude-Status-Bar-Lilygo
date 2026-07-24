@@ -6,6 +6,7 @@ import os
 import queue
 import time
 
+from . import statusline
 from .config import data_dir, log
 from .engine import LONG_TOOLS, derive
 from .fmt import fmt_countdown
@@ -28,6 +29,11 @@ def build_packet(sessions, cfg, usage, now=None):
             and (s.model or s.turn_start or s.turn_started_at)]
     live.sort(key=lambda s: s.first_seen)
     live = live[-cfg["max_sessions"]:]
+    for s in live:
+        try:                       # statusline captures feed derive + packet
+            statusline.refresh(s, cfg, now=now)
+        except Exception:
+            pass
     states = [derive(s, cfg, now) for s in live]   # one derive per session
     act = 0
     if live:
@@ -46,7 +52,7 @@ def build_packet(sessions, cfg, usage, now=None):
         "ses": [s.to_packet(cfg, now=now, state=r)
                 for s, r in zip(live, states)],
         "act": act,
-        "us": usage.snapshot(),
+        "us": usage.snapshot(now=now),
     }
 
 

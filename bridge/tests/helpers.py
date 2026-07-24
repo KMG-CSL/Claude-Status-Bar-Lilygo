@@ -3,6 +3,7 @@ network-free UsageTracker. No serial ports, no ~/.claude, no sleeping."""
 
 import json
 import os
+import tempfile
 import time
 from datetime import datetime, timezone
 
@@ -150,6 +151,10 @@ def make_session(dirpath, records, mtime=T0, filename="fixture-session.jsonl"):
 def base_cfg(**over):
     cfg = dict(DEFAULT_CONFIG)
     cfg["input"] = dict(DEFAULT_CONFIG["input"])
+    # keep tests away from any real capture dir (data_dir()/statusline):
+    # a nonexistent path means "no captures" unless a test overrides it
+    cfg["statusline_dir"] = os.path.join(
+        tempfile.gettempdir(), "csb-tests-no-captures")
     cfg.update(over)
     return cfg
 

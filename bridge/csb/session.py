@@ -44,6 +44,9 @@ class Session:
     def __init__(self, path, mtime_fn=None):
         self.path = path
         self._mtime_fn = mtime_fn or safe_mtime
+        # transcript basename IS the Claude Code session UUID — the same id
+        # the statusline payload carries, so captures join for free
+        self.session_id = os.path.splitext(os.path.basename(path))[0]
         self.offset = 0
         self.name = ""
         self.project = ""             # basename of the session's cwd
@@ -65,6 +68,11 @@ class Session:
         self.pending_ids = {}         # tool_use id -> (name, ts)
         self.limit_reset = 0.0        # unix epoch the rate limit lifts, 0 = none
         self.error = ""               # short API-error reason ("" = none)
+        # statusline capture (Item 3), populated by csb.statusline.refresh
+        self.sl_ts = 0.0              # capture arrival ts (engine liveness)
+        self.sl_ctx_pct = None        # context_window.used_percentage
+        self.sl_effort = ""           # effort.level
+        self._sl_mtime = 0.0          # capture-file mtime already consumed
         self.done_latch = None  # sticky-done: (turn_start, frozen_el, armed_event_ts, src)
         # hook edges (Item 1) — authoritative transitions, trusted by the
         # engine only while the session stays hook-fresh (hook_fresh_s)
@@ -332,12 +340,20 @@ class Session:
         if state is None:
             state = engine.derive(self, cfg, now)
         st, tool, detail, el = state.st, state.tl, state.td, state.el
-        # context window: per-model via the Models API, config as fallback;
-        # if we've measured more tokens than the limit, it's clearly bigger
-        limit = model_context_limit(self.model, cfg["context_limit"])
-        if self.ctx_tokens > limit:
-            limit = 1000000
-        ctx = int(round(100.0 * self.ctx_tokens / limit))
+        # context %: a fresh statusline capture is authoritative (Claude
+        # Code's own number, no network); the Models-API/estimate path is
+        # the last-resort fallback for uninstrumented sessions (Item 3)
+        sl_fresh = self.sl_ts and \
+            (now - self.sl_ts) < cfg.get("statusline_ttl_s", 600)
+        if sl_fresh and isinstance(self.sl_ctx_pct, (int, float)):
+            ctx = int(round(self.sl_ctx_pct))
+        else:
+            # per-model via the Models API, config as fallback; if we've
+            # measured more tokens than the limit, it's clearly bigger
+            limit = model_context_limit(self.model, cfg["context_limit"])
+            if self.ctx_tokens > limit:
+                limit = 1000000
+            ctx = int(round(100.0 * self.ctx_tokens / limit))
         title = (self.custom_title or self.ai_title or self.name
                  or os.path.basename(os.path.dirname(self.path))[:24])
         return {
@@ -348,7 +364,8 @@ class Session:
             "tl": pretty_tool(tool),
             "td": detail[:32],
             "sa": self.subagent_count(cfg, now),
-            "ef": self.effort,
+            "ef": (self.sl_effort if sl_fresh and self.sl_effort
+                   else self.effort),
             "el": el,
             "ti": self.tok_in,
             "to": self.tok_out,

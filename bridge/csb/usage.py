@@ -7,8 +7,10 @@ import subprocess
 import time
 from collections import deque
 
+from . import statusline
 from .config import CLAUDE_DIR, IS_MAC
 from .fmt import fmt_countdown, parse_ts
+from .limits import is_expired
 
 
 def oauth_token():
@@ -108,23 +110,38 @@ class UsageTracker:
             with urllib.request.urlopen(req, timeout=10) as r:
                 data = json.loads(r.read().decode())
             out = {}
+            now = time.time()
             for key, tag in (("five_hour", "5"), ("seven_day", "7")):
                 blk = data.get(key) or {}
                 util = blk.get("utilization")
                 resets = parse_ts(blk.get("resets_at"))
+                if resets and is_expired(resets, now):
+                    # ccburn rollover guard: a stale window that already
+                    # reset is 0%, not a ghost 87%
+                    util, resets = 0, None
                 out["p" + tag] = int(round(util)) if util is not None else -1
-                out["r" + tag] = fmt_countdown(resets - time.time()) if resets else ""
+                out["r" + tag] = fmt_countdown(resets - now) if resets else ""
             out["est"] = False
             self.api_cache = out
         except Exception:
             self.api_cache = None
         return self.api_cache
 
-    def snapshot(self):
+    def snapshot(self, now=None):
+        if now is None:
+            now = time.time()
+        # Item 3: fresh statusline captures beat the OAuth endpoint — they
+        # arrive push-style, cost nothing, and dodge the persistent 429
+        # (claude-code#30930). est stays False: these are real numbers.
+        try:
+            sl = statusline.latest_rate_limits(self.cfg, now)
+        except Exception:
+            sl = None
+        if sl:
+            return sl
         api = self._try_api()
         if api:
             return api
-        now = time.time()
         tok5 = sum(t for ts, t in self.events if ts > now - 5 * 3600)
         tok7 = sum(t for ts, t in self.events)
         first5 = min((ts for ts, _ in self.events if ts > now - 5 * 3600), default=None)

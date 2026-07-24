@@ -130,7 +130,11 @@ def _state(session, cfg, now):
     if hooky:
         activity = max(activity, session.hook_last)
     activity = activity or session.mtime()
-    fresh = (now - activity) < cfg["idle_after_s"]
+    # A statusline capture proves the Claude Code process is alive (Item 3
+    # liveness signal) — it holds off the stale tier, but it is NOT
+    # transcript activity: the quiet/silence clocks below stay on
+    # `activity`, or captures would defer done/approval flips forever.
+    fresh = (now - max(activity, session.sl_ts)) < cfg["idle_after_s"]
 
     pending = None
     if session.pending_ids:
