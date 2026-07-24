@@ -47,7 +47,27 @@ def derive(session, cfg, now=None):
                            _elapsed(session, "wait", now), 0, session.error)
 
     st, tool, detail = _state(session, cfg, now)
-    return StateResult(st, tool, detail, _elapsed(session, st, now))
+    return _apply_sticky_done(session, st, tool, detail, now)
+
+
+def _apply_sticky_done(session, st, tool, detail, now):
+    """Sticky-done (Extra B, ccm file-store.ts:129-136): once a session
+    reports done, only a genuine new user prompt may flip it back to
+    running — late PostToolUse flushes, summary records and noise events
+    must not cause done->run flicker. The latch keys on turn_start, which
+    only a real (non-tool_result, non-noise) user record moves; it also
+    freezes el so the finished-turn duration can't drift under late
+    writes. Rate-limit/error states bypass the latch by returning earlier
+    in derive() — both are new information worth showing on a done tile."""
+    latch = session.done_latch
+    if latch is not None and latch[0] != session.turn_start:
+        session.done_latch = latch = None      # a real new prompt arrived
+    if latch is not None:
+        return StateResult("done", "", "", latch[1])
+    el = _elapsed(session, st, now)
+    if st == "done":
+        session.done_latch = (session.turn_start, el)
+    return StateResult(st, tool, detail, el)
 
 
 def _state(session, cfg, now):

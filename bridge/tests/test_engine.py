@@ -245,6 +245,66 @@ class TestStale(EngineCase):
         self.assertEqual((r.st, r.tl, r.td), ("idle", "", ""))
 
 
+class TestStickyDone(EngineCase):
+    """Extra B: once stopped, only a real user prompt may flip a session
+    back to running."""
+
+    def _done(self):
+        # user T0, tool turn, closing text at T0+10; done after T0+40
+        s = self.make([user(T0), assistant_tool_use(T0 + 2, "Bash", "tu_1"),
+                       tool_result(T0 + 4, "tu_1"),
+                       assistant_text(T0 + 10, text="all done.")],
+                      mtime=T0 + 10)
+        r = self.at(s, T0 + 45)
+        self.assertEqual((r.st, r.el), ("done", 10))   # latch armed, frozen
+        return s
+
+    def test_late_tool_result_flush_does_not_resume(self):
+        s = self._done()
+        append_jsonl(s.path, [tool_result(T0 + 50, "tu_stale")])
+        s.poll([])
+        r = self.at(s, T0 + 51)                    # would be "run" unlatched
+        self.assertEqual((r.st, r.el), ("done", 10))
+
+    def test_late_assistant_flush_does_not_resume(self):
+        s = self._done()
+        append_jsonl(s.path, [assistant_text(T0 + 50, text="ps: one more note")])
+        s.poll([])
+        self.assertEqual(self.at(s, T0 + 52).st, "done")
+
+    def test_summary_and_noise_do_not_resume(self):
+        s = self._done()
+        append_jsonl(s.path, [{"type": "summary", "summary": "Session recap"},
+                              noise(T0 + 55, "file-history-snapshot")])
+        s.poll([])
+        s.mclock.value = T0 + 55
+        self.assertEqual(self.at(s, T0 + 56).st, "done")
+
+    def test_real_user_prompt_resumes(self):
+        s = self._done()
+        append_jsonl(s.path, [user(T0 + 60, text="now add tests")])
+        s.poll([])
+        r = self.at(s, T0 + 61)
+        self.assertEqual((r.st, r.el), ("run", 1))  # new turn, new clock
+
+    def test_latch_rearms_for_the_next_turn(self):
+        s = self._done()
+        append_jsonl(s.path, [user(T0 + 60, text="now add tests"),
+                              assistant_text(T0 + 70, text="tests added.")])
+        s.poll([])
+        r = self.at(s, T0 + 110)                   # quiet 40s -> done again
+        self.assertEqual((r.st, r.el), ("done", 10))
+        append_jsonl(s.path, [tool_result(T0 + 115, "tu_stale2")])
+        s.poll([])
+        self.assertEqual(self.at(s, T0 + 116).st, "done")
+
+    def test_frozen_elapsed_survives_staleness(self):
+        s = self._done()
+        s.mclock.value = T0 + 10
+        r = self.at(s, T0 + 500)                   # deep stale
+        self.assertEqual((r.st, r.el), ("done", 10))
+
+
 class TestElapsed(EngineCase):
     """el semantics per state — the display timer must not change meaning."""
 

@@ -65,6 +65,7 @@ class Session:
         self.pending_ids = {}         # tool_use id -> (name, ts)
         self.limit_reset = 0.0        # unix epoch the rate limit lifts, 0 = none
         self.error = ""               # short API-error reason ("" = none)
+        self.done_latch = None        # sticky-done: (turn_start, frozen_el)
         self.first_seen = time.time()
 
     # ---- incremental parse ----
