@@ -5,6 +5,7 @@ import json
 import os
 import time
 
+from . import engine
 from .fmt import fmt_tokens, parse_ts, pretty_model, pretty_tool, tool_detail
 from .usage import model_context_limit
 
@@ -17,8 +18,9 @@ def safe_mtime(path):
 
 
 class Session:
-    def __init__(self, path):
+    def __init__(self, path, mtime_fn=None):
         self.path = path
+        self._mtime_fn = mtime_fn or safe_mtime
         self.offset = 0
         self.name = ""
         self.project = ""             # basename of the session's cwd
@@ -154,57 +156,21 @@ class Session:
             self.last_event_ts = ts
 
     # ---- derived state ----
-    def state(self, cfg):
-        """-> (state, tool_name, detail)"""
-        now = time.time()
-        mtime = safe_mtime(self.path)
-        fresh = (now - mtime) < cfg["idle_after_s"]
+    def mtime(self):
+        return self._mtime_fn(self.path)
 
-        pending = None
-        if self.pending_ids:
-            pending = sorted(self.pending_ids.values(), key=lambda v: v[1])[-1]
+    def state(self, cfg, now=None):
+        """-> (state, tool_name, detail). Kept for compatibility;
+        the derivation itself lives in csb.engine.derive()."""
+        r = engine.derive(self, cfg, now)
+        return r.st, r.tl, r.td
 
-        if pending and pending[0] == "AskUserQuestion":
-            # Claude explicitly asked a question - waiting, no threshold
-            return "wait", "Question", pending[2]
-
-        # Orchestration tools legitimately run for minutes with no writes to
-        # the main transcript (subagents write elsewhere) - never read them
-        # as permission prompts. Active subagent files are proof of work.
-        LONG_TOOLS = ("Task", "Agent", "Workflow", "TaskOutput", "Monitor")
-        if pending and (pending[0] in LONG_TOOLS or self.subagent_count() > 0):
-            return "tool", pending[0], pending[2]
-
-        if fresh:
-            if pending:
-                name, pts, detail = pending
-                if now - pts > cfg["wait_tool_s"] and now - mtime > cfg["wait_tool_s"]:
-                    return "wait", name, detail   # likely a permission prompt
-                return "tool", name, detail
-            # no pending tools: if the last thing was an assistant message and
-            # nothing new has been written for a while, the turn is over.
-            # A message ending in "?" flips to wait on a shorter fuse.
-            if self.last_role == "assistant":
-                quiet = now - mtime
-                asks = self.last_assistant_text.rstrip().endswith("?")
-                if asks and quiet > cfg.get("question_after_s", 12):
-                    return "wait", "", ""
-                if quiet > cfg["done_after_s"]:
-                    return "done", "", ""
-            return "run", "", ""
-        # stale
-        if pending:
-            return "wait", pending[0], pending[2]
-        if self.last_assistant_text.rstrip().endswith("?"):
-            return "wait", "", ""
-        if self.last_role == "assistant":
-            return "done", "", ""
-        return "idle", "", ""
-
-    def subagent_count(self):
+    def subagent_count(self, cfg=None, now=None):
         """Active helper-agent transcripts under <slug>/<session-uuid>/subagents."""
-        now = time.time()
-        if now - self._sa_checked < 10:
+        if now is None:
+            now = time.time()
+        cfg = cfg or {}
+        if now - self._sa_checked < cfg.get("subagent_cache_s", 10):
             return self._sa_count
         self._sa_checked = now
         n = 0
@@ -215,23 +181,20 @@ class Session:
             for dirpath, _dirs, files in os.walk(base):
                 for fn in files:
                     if fn.startswith("agent-") and fn.endswith(".jsonl"):
-                        if now - safe_mtime(os.path.join(dirpath, fn)) < 90:
+                        if now - safe_mtime(os.path.join(dirpath, fn)) < \
+                                cfg.get("subagent_live_s", 90):
                             n += 1
         self._sa_count = n
         return n
 
-    def to_packet(self, cfg):
-        st, tool, detail = self.state(cfg)
-        el = 0
-        now = time.time()
-        if st == "wait":
-            # show how long it's been waiting on the user, not turn length
-            el = max(0, int(now - (self.last_event_ts or now)))
-        elif self.turn_start:
-            end = self.last_event_ts or now
-            if st in ("run", "tool"):
-                end = now
-            el = max(0, int(end - self.turn_start))
+    def to_packet(self, cfg, now=None, state=None):
+        """Wire dict for ses[]. `state` takes a precomputed StateResult so
+        build_packet derives each session exactly once per packet."""
+        if now is None:
+            now = time.time()
+        if state is None:
+            state = engine.derive(self, cfg, now)
+        st, tool, detail, el = state
         # context window: per-model via the Models API, config as fallback;
         # if we've measured more tokens than the limit, it's clearly bigger
         limit = model_context_limit(self.model, cfg["context_limit"])
@@ -247,7 +210,7 @@ class Session:
             "st": st,
             "tl": pretty_tool(tool),
             "td": detail[:32],
-            "sa": self.subagent_count(),
+            "sa": self.subagent_count(cfg, now),
             "ef": self.effort,
             "el": el,
             "ti": self.tok_in,

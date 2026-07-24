@@ -33,29 +33,33 @@ from csb.config import (
 from csb.fmt import (
     fmt_countdown, fmt_tokens, parse_ts, pretty_model, pretty_tool, tool_detail,
 )
+from csb.engine import LONG_TOOLS, StateResult, derive
 from csb.session import Session, find_transcripts, safe_mtime
 from csb.usage import UsageTracker, model_context_limit, oauth_token
 from csb.serial_link import SerialLink, send_logo
 
 
-def build_packet(sessions, cfg, usage):
-    now = time.time()
+def build_packet(sessions, cfg, usage, now=None):
+    if now is None:
+        now = time.time()
     live = [s for s in sessions.values()
-            if now - safe_mtime(s.path) < cfg["active_window_min"] * 60
+            if now - s.mtime() < cfg["active_window_min"] * 60
             and (s.model or s.turn_start)]
     live.sort(key=lambda s: s.first_seen)
     live = live[-cfg["max_sessions"]:]
+    states = [derive(s, cfg, now) for s in live]   # one derive per session
     act = 0
     if live:
         # auto-follow: prefer a waiting session, else most recently active
-        waiting = [i for i, s in enumerate(live) if s.state(cfg)[0] == "wait"]
+        waiting = [i for i, r in enumerate(states) if r.st == "wait"]
         if waiting:
             act = waiting[0]
         else:
-            act = max(range(len(live)), key=lambda i: safe_mtime(live[i].path))
+            act = max(range(len(live)), key=lambda i: live[i].mtime())
     return {
         "t": "s",
-        "ses": [s.to_packet(cfg) for s in live],
+        "ses": [s.to_packet(cfg, now=now, state=r)
+                for s, r in zip(live, states)],
         "act": act,
         "us": usage.snapshot(),
     }
