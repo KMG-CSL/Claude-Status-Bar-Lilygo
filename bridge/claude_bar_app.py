@@ -125,6 +125,12 @@ class App:
         self.tray_icon = None
         self.logo_img = None
 
+        # LHS A/B experiment (keys 1/2/3 switch, f toggles wait-edge flash)
+        self.lhs_variant = 1          # 0=control (logo+ctx)  1=grid  2=rollup
+        self.flash_on = True
+        self._prev_st = {}            # slot index -> last seen state
+        self._flash = {}              # slot index -> blink-until timestamp
+
         self.root = tk.Tk()
         self.root.title("Claude Status Bar")
         self.root.configure(bg="#111318")
@@ -135,6 +141,9 @@ class App:
                                 highlightbackground="#333")
         self.canvas.pack(padx=14, pady=(14, 8))
         self.canvas.bind("<Button-1>", lambda e: self.toggle_page())
+        for k in ("1", "2", "3"):
+            self.root.bind(k, self._set_variant)
+        self.root.bind("f", self._toggle_flash)
 
         bar = tk.Frame(self.root, bg="#111318")
         bar.pack(fill="x", padx=14, pady=(0, 6))
@@ -340,6 +349,24 @@ class App:
     def toggle_page(self):
         self.page = (self.page + 1) % 2
 
+    def _set_variant(self, ev):
+        self.lhs_variant = int(ev.char) - 1
+        self.draw()
+
+    def _toggle_flash(self, _ev):
+        self.flash_on = not self.flash_on
+        self.draw()
+
+    def _track_edges(self, ses):
+        """Remember per-slot state; arm a blink when a session flips to wait."""
+        now = time.time()
+        for i, s in enumerate(ses):
+            st = s.get("st", "idle")
+            prev = self._prev_st.get(i)
+            if st == "wait" and prev is not None and prev != "wait":
+                self._flash[i] = now + 1.6
+            self._prev_st[i] = st
+
     def tick(self):
         self.draw()
         self.root.after(500, self.tick)
@@ -348,8 +375,13 @@ class App:
         c = self.canvas
         c.delete("all")
         pkt = self.bt.last_pkt
+        conn = "display connected" if self.bt.connected else "display not found"
+        names = ("control", "grid", "rollup")
         self.status_lbl.config(
-            text="display connected" if self.bt.connected else "display not found")
+            text=f"{conn}  ·  LHS [1-3]: {names[self.lhs_variant]}"
+                 f"  ·  [f]lash: {'on' if self.flash_on else 'off'}")
+        if pkt and pkt.get("ses"):
+            self._track_edges(pkt["ses"])
 
         if not pkt or not pkt.get("ses"):
             c.create_text(self.W / 2, 80, text="No sessions", fill=TEXT,
@@ -387,18 +419,15 @@ class App:
         c = self.canvas
         s = pkt["ses"][pkt.get("act", 0) % len(pkt["ses"])]
 
-        # left column
-        if self.logo_img:
-            c.create_image(14, 12, image=self.logo_img, anchor="nw")
-        else:
-            c.create_text(14, 30, text="**", fill=ORANGE, anchor="w",
-                          font=("Segoe UI", 18, "bold"))
-        c.create_text(10, 108, text="CONTEXT", fill=DIM,
-                      font=("Consolas", 8), anchor="w")
+        # left column — A/B experiment variants (keys 1/2/3)
         cx = s.get("cx", 0)
         ctx_col = RED if cx >= 80 else (YELLOW if cx >= 50 else GREEN)
-        c.create_text(10, 140, text=f"{cx}%", fill=ctx_col,
-                      font=("Segoe UI", 20, "bold"), anchor="w")
+        if self.lhs_variant == 1:
+            self.draw_lhs_grid(pkt["ses"], pkt.get("act", 0) % len(pkt["ses"]))
+        elif self.lhs_variant == 2:
+            self.draw_lhs_rollup(pkt["ses"])
+        else:
+            self.draw_lhs_control(cx, ctx_col)
         c.create_line(178, 18, 178, 166, fill=PANEL)
 
         # center: project / title / state / detail
@@ -450,6 +479,104 @@ class App:
         eb = f"{el}s" if el < 180 else f"{el // 60}m{el % 60:02d}s"
         c.create_text(z0, 158, text=f"{eb}   ▲{fmt_k(s.get('ti'))}   ▼{fmt_k(s.get('to'))}",
                       fill=DIM, anchor="w", font=("Segoe UI", 11))
+        if self.lhs_variant != 0:
+            # context % lives in the LHS on the control variant only
+            c.create_text(self.W - 10, 158, text=f"ctx {cx}%", fill=ctx_col,
+                          anchor="e", font=("Segoe UI", 11, "bold"))
+
+    def draw_lhs_control(self, cx, ctx_col):
+        """Variant 0: today's firmware layout — logo + context readout."""
+        c = self.canvas
+        if self.logo_img:
+            c.create_image(14, 12, image=self.logo_img, anchor="nw")
+        else:
+            c.create_text(14, 30, text="**", fill=ORANGE, anchor="w",
+                          font=("Segoe UI", 18, "bold"))
+        c.create_text(10, 108, text="CONTEXT", fill=DIM,
+                      font=("Consolas", 8), anchor="w")
+        c.create_text(10, 140, text=f"{cx}%", fill=ctx_col,
+                      font=("Segoe UI", 20, "bold"), anchor="w")
+
+    def _cell_style(self, s, idx, now):
+        st = s.get("st", "idle")
+        fill, fg = {
+            "wait": (ORANGE, BG),
+            "done": (GREEN, BG),
+            "run":  (PANEL, TEXT),
+            "tool": (PANEL, TEXT),
+        }.get(st, (BAR_BG, DIM))
+        if (self.flash_on and self._flash.get(idx, 0) > now
+                and int(now * 2) % 2 == 0):
+            fill, fg = TEXT, BG
+        return fill, fg
+
+    def draw_lhs_grid(self, ses, act):
+        """Variant 1: fleet minimap — one cell per session."""
+        c = self.canvas
+        n = len(ses)
+        x0, y0, x1, y1 = 8, 20, 172, 166
+        cols = 1 if n <= 2 else 2
+        rows = (n + cols - 1) // cols
+        gap = 4
+        cw = (x1 - x0 - gap * (cols - 1)) / cols
+        ch = (y1 - y0 - gap * (rows - 1)) / rows
+        now = time.time()
+        for i, s in enumerate(ses):
+            r, col = divmod(i, cols)
+            cx0 = x0 + col * (cw + gap)
+            cy0 = y0 + r * (ch + gap)
+            fill, fg = self._cell_style(s, i, now)
+            c.create_rectangle(cx0, cy0, cx0 + cw, cy0 + ch, fill=fill,
+                               outline=TEXT if i == act else "",
+                               width=2 if i == act else 0)
+            size = 14 if ch >= 55 else (11 if ch >= 32 else 8)
+            c.create_text(cx0 + 7, cy0 + ch / 2 - 1, text=chr(65 + i),
+                          fill=fg, anchor="w", font=("Segoe UI", size, "bold"))
+            if cols == 1 and s.get("pj"):
+                c.create_text(cx0 + 30, cy0 + ch / 2 - 1, text=s["pj"][:12],
+                              fill=fg, anchor="w", font=("Segoe UI", 9))
+            cxp = min(s.get("cx", 0) or 0, 100)
+            bw = (cw - 4) * cxp / 100
+            if bw > 1:
+                bcol = RED if cxp >= 80 else (YELLOW if cxp >= 50 else GREEN)
+                c.create_rectangle(cx0 + 2, cy0 + ch - 4, cx0 + 2 + bw,
+                                   cy0 + ch - 1, fill=bcol, outline="")
+
+    def draw_lhs_rollup(self, ses):
+        """Variant 2: aggregate rollup — proportional state bands, no identity."""
+        c = self.canvas
+        counts = {"wait": 0, "act": 0, "done": 0, "idle": 0}
+        for s in ses:
+            st = s.get("st", "idle")
+            key = st if st in ("wait", "done") else (
+                "act" if st in ("run", "tool") else "idle")
+            counts[key] += 1
+        groups = (("wait", ORANGE, BG, "!"),
+                  ("act",  PANEL, TEXT, "▶"),
+                  ("done", GREEN, BG, "✓"),
+                  ("idle", BAR_BG, DIM, "·"))
+        x0, y0, x1, y1 = 8, 20, 172, 148
+        now = time.time()
+        blink = (self.flash_on and int(now * 2) % 2 == 0
+                 and any(t > now for t in self._flash.values()))
+        y = y0
+        for key, fill, fg, glyph in groups:
+            n = counts[key]
+            if not n:
+                continue
+            if key == "wait" and blink:
+                fill, fg = TEXT, BG
+            h = (y1 - y0) * n / len(ses)
+            c.create_rectangle(x0, y, x1, y + h, fill=fill, outline=BG)
+            if h >= 16:
+                c.create_text(x0 + 8, y + h / 2, anchor="w", fill=fg,
+                              text=f"{n} {glyph}",
+                              font=("Segoe UI", 11, "bold"))
+            y += h
+        summary = "  ".join(f"{counts[k]}{g}" for k, _f, _fg, g in groups
+                            if counts[k])
+        c.create_text(x0, 158, text=summary, fill=DIM, anchor="w",
+                      font=("Segoe UI", 10))
 
     def draw_usage(self, pkt):
         c = self.canvas
