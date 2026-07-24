@@ -23,3 +23,5 @@ installer/
 # company logos stay private; the original starter-pack ships with the repo
 logos/*
 !logos/starter-pack
+bridge/slots.json
+bridge/hook-port
