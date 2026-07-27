@@ -57,6 +57,26 @@ way, doing less rather than nothing off tmux. It keeps that name because
 tmux is its distinguishing capability. `raise_window` is X11-only —
 GNOME/Wayland blocks programmatic activation by design, so it no-ops there.
 
+**Validated against real tmux 3.7b (macOS, 2026-07-27).** The unit tests
+stub the runner, so these were checked against a live server instead:
+
+- `list-panes -a -F "#{pane_tty} #{session_name}:#{window_index}.#{pane_index}"`
+  emits exactly the format `tmux_pane_for` parses; pane ttys are
+  `/dev/ttysNNN` and match `ps -o tty=` after normalization.
+- Pane select works, including **across sessions** (`side:0.1` selected
+  while `work` was current) — `select-window` handles the session prefix.
+- **`switch-client` fails with "no current client" (rc 1) on a detached
+  server.** Harmless and deliberately ignored: `select-window` has already
+  moved the session, and switch-client only matters when a client is
+  attached elsewhere. Don't "fix" this by checking its return.
+- The off-tmux and unknown-tty paths were exercised live: no tmux call is
+  made at all without `TMUX` in the env, and an unowned tty reports
+  `TMUX set but no pane owns …` rather than failing mutely.
+
+Still unproven, and only a Linux box can settle it: `raise_window` itself
+(whether `wmctrl -lp` reports the terminal emulator's PID or the shell's),
+and everything Wayland.
+
 ## Config plane (override-only; auto is the default)
 
 ```json

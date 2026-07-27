@@ -204,6 +204,16 @@ def raise_window(pid, runner=_run):
     return False
 
 
+def _no_raise_reason():
+    """Why raise_window() did nothing, in terms true of THIS platform —
+    blaming Wayland on a Mac is just noise (pinning adapter=tmux on macOS
+    is legitimate: tmux runs there, it simply gets pane select only)."""
+    if sys.platform.startswith("linux"):
+        return "window raise failed (needs wmctrl/xdotool; X11 only, " \
+               "no-op under Wayland)"
+    return f"window raise not supported on {sys.platform} (pane select only)"
+
+
 def focus_iterm2(ctx, runner=_run):
     """iTerm2 owns every one of its tabs, so the tty alone identifies the
     session and AppleScript can select it directly."""
@@ -239,6 +249,10 @@ def focus_tmux(ctx, runner=_run):
             win = pane.rsplit(".", 1)[0]
             sel = runner(["tmux", "select-window", "-t", win])
             runner(["tmux", "select-pane", "-t", pane])
+            # switch-client fails with "no current client" on a detached
+            # server (verified on tmux 3.7b) — harmless, the select-window
+            # above has already moved the session, so its rc is ignored on
+            # purpose. It matters only when a client IS attached elsewhere.
             runner(["tmux", "switch-client", "-t", win])
             if sel.returncode != 0:
                 detail.append("pane select failed: "
@@ -247,7 +261,7 @@ def focus_tmux(ctx, runner=_run):
             detail.append(f"TMUX set but no pane owns {ctx['tty']}")
     raised = raise_window(ctx["pid"], runner=runner)
     if not raised:
-        detail.append("window raise unavailable (X11 only; no-op on Wayland)")
+        detail.append(_no_raise_reason())
     # honest partial: landing the user in the right window still counts,
     # but the shortfall is named rather than collapsed into a bare ok
     ok = bool(pane and not any(d.startswith("pane select failed") for d in detail)) \

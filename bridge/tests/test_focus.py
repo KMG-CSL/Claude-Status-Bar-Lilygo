@@ -120,6 +120,17 @@ class TmuxAdapterCase(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("Wayland", detail)
 
+    def test_no_raise_reason_is_true_of_the_platform_it_names(self):
+        # blaming Wayland on a Mac is noise: pinning adapter=tmux on macOS
+        # is legitimate, it just gets pane select only
+        run = fake_runner({"tmux": TMUX_PANES})
+        with mock.patch.object(focus.sys, "platform", "darwin"):
+            ok, detail = focus.focus_tmux(
+                ctx(tty="/dev/pts/7", env={"TMUX": "/tmp/s,1,0"}), run)
+        self.assertTrue(ok)                    # pane select still landed
+        self.assertIn("darwin", detail)
+        self.assertNotIn("Wayland", detail)
+
     def test_raise_is_reported_even_when_the_pane_is_missing(self):
         # TMUX set but no pane owns the tty: say so, still raise
         run = fake_runner({"tmux": TMUX_PANES,
