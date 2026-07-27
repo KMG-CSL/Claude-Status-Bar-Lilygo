@@ -122,14 +122,29 @@ work.** Three defects, in dependency order — 1 unblocks 2 unblocks 3:
    in `focus_slot`; it just isn't passed down. Without it `auto` has to
    guess, and it guesses wrong for every non-tmux session.
 
-3. **Adapters need "declined" as an outcome distinct from "failed."**
-   Follows from 2: if the session isn't in tmux, the tmux adapter should
-   *decline* so a window-raise can still be tried — not report a failure
-   and stop. Failure is "I own this and it broke"; declined is "not mine."
+**Explicitly rejected (2026-07-27): a decline-and-fall-through adapter
+chain.** Tempting after 2, and the wrong shape. A window raise is not an
+*alternative* to a tmux pane select, it's its companion — in the tmux case
+*both* must happen. A chain would either stop once tmux succeeded, or need
+a "succeeded but keep going" state, which is worse than what we have now.
+So: `adapter_for()` keeps returning exactly one string, the startup line
+stays a truthful static statement, pinning stays a pin, and `auto`-by-
+platform simply gains linux -> tmux. No new return states, no chain
+machinery.
 
-Only then the tmux adapter itself: `tmux list-panes -a -F "#{pane_tty} ..."`,
-match the session's tty, `switch-client`/`select-window` — composing with an
-outer window-raise adapter (raise the terminal, then select the pane).
+Composition happens *inside* the adapter instead. `raise_window(pid)` is a
+plain helper, deliberately **not** an adapter: different contract (best
+effort, no session identity, different return), so there is no adapter
+calling an adapter — just one adapter calling a shared utility, which is
+ordinary code.
+
+The tmux adapter therefore **never declines**: it selects the pane when the
+session is under tmux (`tmux list-panes -a -F "#{pane_tty} ..."` matched on
+tty, then `switch-client`/`select-window`) and raises the window either
+way. Off tmux it does *less*, not nothing. It keeps the name `tmux` because
+that's its distinguishing capability and it matches kvm-design.md's
+vocabulary — the degrade-to-raise-only behavior belongs in its docstring,
+not in its name.
 
 ## Second display / old-revision touch validation
 The AXS15231B (old hw revision) touch path in touch_drv.h is implemented from
