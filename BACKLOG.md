@@ -100,15 +100,36 @@ numeric context joins row 5 on the right.
 - Flash-on-wait-edge: shipped in firmware (1.6s white blink), unjudged —
   user hasn't caught one live yet.
 
-## KVM: Linux / tmux adapter
-`focus.adapter=auto` resolves to nothing off macOS today, so KVM is off on
-the Ubuntu box. The AppleScript-by-tty approach doesn't translate — going
-through D-Bus/wmctrl to raise a specific *tab* is the hard part, and the
-tmux path sidesteps it entirely: `tmux list-panes -a -F "#{pane_tty} ..."`,
-match the session's tty, `switch-client`/`select-window`. That composes
-with an outer adapter (raise the terminal window, then select the pane).
-Slot to fill: `ADAPTERS` in `csb/focus.py`; both triggers already route
-through `focus_slot`, so the adapter is the only new code.
+## KVM: make adapters real, then add Linux/tmux (next up, specced 2026-07-27)
+`focus.adapter=auto` resolves to nothing off macOS, so KVM is off on the
+Ubuntu box. **But the adapter seam is currently fake, and that's the actual
+work.** Three defects, in dependency order — 1 unblocks 2 unblocks 3:
+
+1. **The resolved adapter name is thrown away.** `adapter_for()` returns a
+   name, `enabled()` checks it's non-empty, and then nothing reads it:
+   `focus_slot` ends by calling `focus_tty()`, hardcoded to osascript. So
+   "add an entry to `ADAPTERS`" is *not* true — adding tmux today means
+   editing the tail of the shared function both platforms run. Fix: make
+   `ADAPTERS` a dispatch table, name -> function
+   (`{"iterm2": focus_iterm2, "tmux": focus_tmux, ...}`), and have
+   `focus_slot` call the resolved one. Then an adapter really is one entry.
+
+2. **Adapters get only the tty; they need the claude PID too.** tty is
+   sufficient for iTerm2 because iTerm2 owns every tab. On Linux it isn't:
+   a session may be in tmux, or a bare TTY/X shell, and the adapter has to
+   know which. `/proc/<pid>/environ` (`TMUX=...`) answers it — the exact
+   per-session detection kvm-design.md specifies. The PID is already sitting
+   in `focus_slot`; it just isn't passed down. Without it `auto` has to
+   guess, and it guesses wrong for every non-tmux session.
+
+3. **Adapters need "declined" as an outcome distinct from "failed."**
+   Follows from 2: if the session isn't in tmux, the tmux adapter should
+   *decline* so a window-raise can still be tried — not report a failure
+   and stop. Failure is "I own this and it broke"; declined is "not mine."
+
+Only then the tmux adapter itself: `tmux list-panes -a -F "#{pane_tty} ..."`,
+match the session's tty, `switch-client`/`select-window` — composing with an
+outer window-raise adapter (raise the terminal, then select the pane).
 
 ## Second display / old-revision touch validation
 The AXS15231B (old hw revision) touch path in touch_drv.h is implemented from

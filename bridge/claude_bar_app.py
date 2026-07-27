@@ -3,8 +3,8 @@
 Claude Status Bar — desktop app.
 
 Runs the bridge with a UI: live preview of what the hardware display shows,
-logo uploader, serial status, minimize-to-system-tray, and a
-start-with-Windows toggle.
+serial status, session cycling, and an autostart toggle. Works with no
+device attached — the preview is the point; serial just stays disconnected.
 
     python claude_bar_app.py           # (--tray is accepted and ignored,
                                        #  kept for old autostart shortcuts)

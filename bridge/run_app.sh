@@ -10,8 +10,11 @@ if [[ ! -x "$VENV/bin/python" ]]; then
     python3 -m venv "$VENV"
     "$VENV/bin/pip" -q install pyserial
 fi
-if ! "$VENV/bin/python" -c "import PIL, pystray" 2>/dev/null; then
-    "$VENV/bin/pip" -q install pillow pystray
+# pillow is only needed by set_logo.py, not by the app — best-effort so a
+# failed wheel never blocks a launch (pystray went with the tray in 7f2e587;
+# on macOS it dragged in pyobjc and could abort this script under set -e).
+if ! "$VENV/bin/python" -c "import PIL" 2>/dev/null; then
+    "$VENV/bin/pip" -q install pillow || echo "note: pillow unavailable (only set_logo.py needs it)"
 fi
 if ! "$VENV/bin/python" -c "import tkinter" 2>/dev/null; then
     echo "tkinter is missing."
