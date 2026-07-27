@@ -13,6 +13,7 @@ import io
 import json
 import os
 import socket
+import subprocess
 import sys
 import tempfile
 import time
@@ -503,6 +504,72 @@ class TestInstaller(InstallerCase):
         self.assertEqual(cfg["hooks"]["Notification"][0]["matcher"],
                          "permission_prompt")
         self.assertNotIn("matcher", cfg["hooks"]["Stop"][0])
+
+    def _downgrade_to_gen1(self):
+        """Rewrite installed entries as a pre-ppid (gen 1) install."""
+        cfg = json.loads(self.read())
+        for groups in cfg["hooks"].values():
+            for g in groups:
+                for h in g["hooks"]:
+                    h["command"] = (h["command"].split(" # csb-gen=")[0]
+                                    .replace("?ppid=$PPID", ""))
+        self.write_fixture(cfg)
+
+    def test_install_stamps_the_current_generation(self):
+        self.install()
+        self.assertEqual(hooks_mod.installed_generations(self.settings),
+                         [hooks_mod.HOOK_GEN])
+
+    def test_unstamped_but_ppid_carrying_install_is_not_called_stale(self):
+        # the stamp postdates the ppid change, so real installs exist that
+        # are exact yet unstamped — warning about those trains people to
+        # ignore the warning
+        self.install()
+        cfg = json.loads(self.read())
+        for groups in cfg["hooks"].values():
+            for g in groups:
+                for h in g["hooks"]:
+                    h["command"] = h["command"].split(" # csb-gen=")[0]
+        self.write_fixture(cfg)
+        self.assertEqual(hooks_mod.installed_generations(self.settings), [2])
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            hooks_mod.status(self.settings, port_file=self.port_file)
+        self.assertNotIn("STALE", buf.getvalue())
+
+    def test_generation_stamp_is_an_inert_shell_comment(self):
+        # the stamp rides along as a trailing comment: it must never change
+        # what the hook command does when sh runs it
+        cmd = hooks_mod.hook_command(self.port_file)
+        self.assertIn(f"# {hooks_mod.GEN_TOKEN}{hooks_mod.HOOK_GEN}", cmd)
+        r = subprocess.run(["sh", "-c", cmd], input="{}",
+                           capture_output=True, text=True, timeout=10)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_stale_generation_is_detected_and_upgraded_by_reinstall(self):
+        self.install()
+        self._downgrade_to_gen1()
+        self.assertEqual(hooks_mod.installed_generations(self.settings), [1])
+        # still "installed" — which is exactly why staleness needs surfacing
+        self.assertEqual(len(hooks_mod.installed_events(self.settings)),
+                         len(ALL_EVENTS))
+        self.install()
+        self.assertEqual(hooks_mod.installed_generations(self.settings),
+                         [hooks_mod.HOOK_GEN])
+
+    def test_status_warns_only_while_the_install_is_stale(self):
+        self.install()
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            hooks_mod.status(self.settings, port_file=self.port_file)
+        self.assertNotIn("STALE", buf.getvalue())
+
+        self._downgrade_to_gen1()
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            hooks_mod.status(self.settings, port_file=self.port_file)
+        self.assertIn("STALE", buf.getvalue())
+        self.assertIn("ppid", buf.getvalue())    # says what actually breaks
 
     def test_install_is_idempotent(self):
         self.install()

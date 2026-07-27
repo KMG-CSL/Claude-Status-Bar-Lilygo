@@ -29,6 +29,15 @@ from .config import CLAUDE_DIR, data_dir, debug, load_config, log
 MARKER = "__claudestatusbar_hook"
 TAG = "claudestatusbar"
 
+# Generation stamp inside the installed command (a trailing sh comment, so
+# it never affects execution). `status` compares it against HOOK_GEN and
+# tells the user to re-run install when their entries predate a change that
+# matters. Bump this whenever hook_command() changes meaningfully.
+#   gen 1 - original: no ppid, KVM focus fell back to cwd guessing
+#   gen 2 - adds ?ppid=$PPID: exact session<->PID binding (kvm-design.md)
+HOOK_GEN = 2
+GEN_TOKEN = "csb-gen="
+
 # If the bridge ever spawns its own `claude` probe, its cwd must end with
 # this suffix so its hook events are dropped at the listener (ClaudeBar
 # #172 self-probe guard). Unused until a probe exists.
@@ -176,7 +185,8 @@ def hook_command(port_file=None):
     # session<->PID binding for KVM focus, no cwd guessing (kvm-design.md)
     return (MARKER + "(){ p=$(cat); (curl -s -m 2 -X POST "
             f"\"http://127.0.0.1:$(cat '{pf}' 2>/dev/null)/hook?ppid=$PPID\" "
-            "--data-binary \"$p\" >/dev/null 2>&1 &); }; " + MARKER)
+            "--data-binary \"$p\" >/dev/null 2>&1 &); }; " + MARKER
+            + f" # {GEN_TOKEN}{HOOK_GEN}")
 
 
 def _read_settings(path):
@@ -318,6 +328,54 @@ def installed_events(settings_path):
     return sorted(out)
 
 
+def _gen_of(command):
+    """Generation of an installed command.
+
+    The stamp itself postdates gen 2, so an unstamped command is graded on
+    what it can actually do rather than assumed ancient: carrying ?ppid=
+    means it is a gen-2 install that simply predates the stamp. Grading it
+    gen 1 would nag users whose hooks are already exact.
+    """
+    i = command.find(GEN_TOKEN)
+    if i < 0:
+        return 2 if "?ppid=" in command else 1
+    digits = ""
+    for ch in command[i + len(GEN_TOKEN):]:
+        if not ch.isdigit():
+            break
+        digits += ch
+    return int(digits) if digits else 1
+
+
+def installed_generations(settings_path):
+    """-> sorted list of distinct generations across our installed entries.
+
+    A stale generation is invisible otherwise: the entries look installed
+    and events keep arriving, but a pre-gen-2 command carries no ppid, so
+    KVM focus silently degrades to cwd guessing.
+    """
+    settings, _raw = _read_settings(settings_path)
+    if not settings:
+        return []
+    hooks = settings.get("hooks")
+    if not isinstance(hooks, dict):
+        return []
+    gens = set()
+    for groups in hooks.values():
+        if not isinstance(groups, list):
+            continue
+        for g in groups:
+            if not isinstance(g, dict):
+                continue
+            for h in g.get("hooks") or []:
+                cmd = str(h.get("command", "")) if isinstance(h, dict) else ""
+                if MARKER in cmd:
+                    gens.add(_gen_of(cmd))
+            if g.get("_tag") == TAG and not (g.get("hooks") or []):
+                gens.add(1)          # legacy tagged entry, no command to read
+    return sorted(gens)
+
+
 def status(settings_path, port_file=None):
     if sys.platform == "win32":
         print("unsupported platform (hook command is POSIX-only)")
@@ -326,8 +384,14 @@ def status(settings_path, port_file=None):
     if events:
         print(f"installed ({len(events)} events) in {settings_path}: "
               + ", ".join(events))
-    else:
-        print(f"not installed in {settings_path}")
+        stale = [g for g in installed_generations(settings_path)
+                 if g < HOOK_GEN]
+        if stale:
+            print(f"  STALE: {len(stale)} entry generation(s) "
+                  f"{', '.join(str(g) for g in stale)} predate the current "
+                  f"gen {HOOK_GEN} — re-run `install` to upgrade. Until then "
+                  "hook events still arrive, but they carry no ppid, so KVM "
+                  "focus falls back to guessing by cwd.")
     pf = resolved_port_file(port_file)
     try:
         with open(pf, "r", encoding="utf-8") as f:

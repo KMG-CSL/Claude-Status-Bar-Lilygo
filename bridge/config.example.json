@@ -32,7 +32,8 @@
     "wait": "",
     "done": ""
   },
-  "_input_comment": "actions: cycle | page | usage | flip | none (pushed to display on connect)",
+  "_input_comment": "actions: cycle | page | usage | flip | focus | none (pushed to display on connect)",
+  "_focus_comment": "focus = KVM: hold on a session raises its terminal (macOS/iTerm2 only today; elsewhere it logs why and does nothing). For the KVM layout set hold=focus and boot_short=usage — see docs/kvm-design.md. Needs hooks installed for exact session->PID binding: python -m csb.hooks status",
   "input": {
     "tap": "cycle",
     "swipe": "cycle",

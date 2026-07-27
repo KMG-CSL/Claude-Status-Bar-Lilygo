@@ -71,6 +71,11 @@ Open a terminal, run `claude`, ask it something — a session cell should
 appear within a few seconds. Tap to cycle sessions, swipe left/right ditto,
 touch-and-hold ~0.6 s for the usage page.
 
+Hold is remappable: set `"hold": "focus"` in `bridge/config.json` and a
+long-press raises that session's terminal window instead (macOS/iTerm2
+only for now) — move the usage page to the BOOT button with
+`"boot_short": "usage"`. See `bridge/config.example.json`.
+
 ## 4. Report your touch revision (please!)
 
 The board shipped in two hardware revisions with different touch chips.

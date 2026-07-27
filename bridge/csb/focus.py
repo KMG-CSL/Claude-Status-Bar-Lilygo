@@ -7,9 +7,11 @@ terminal to foreground that exact tab (docs/kvm-design.md).
 v1 scope, deliberately minimal:
 - adapter: iTerm2 only (AppleScript by tty) — the design doc's per-session
   env detection and the tmux/linux adapters come later
-- PID binding: claude processes matched by cwd. When several claude
-  processes share one cwd we cannot disambiguate without the hook-ppid
-  enhancement; we pick the newest and say so in the log.
+- PID binding: exact when the session arrived through a hook, which posts
+  the claude process's own pid (hooks.py gen 2). Sessions seen only via
+  transcript tailing, or whose recorded pid has since died, fall back to
+  matching claude processes by cwd; a cwd shared by several sessions is
+  ambiguous, so we pick the newest and say so in the log.
 Every attempt logs its outcome; a failure never retries (single shot).
 """
 
@@ -122,7 +124,8 @@ def focus_slot(core, sl, runner=_run):
     pid = pids[-1]
     if len(pids) > 1:
         log("focus", f"{ses.project}: {len(pids)} claude PIDs share this cwd — "
-            f"guessing newest ({pid}); exact binding arrives with hook ppid")
+            f"guessing newest ({pid}). Exact binding needs this session's "
+            "hooks: python -m csb.hooks status")
     tty = tty_of(pid, runner=runner)
     if not tty:
         log("focus", f"{ses.project}: pid {pid} has no tty")
