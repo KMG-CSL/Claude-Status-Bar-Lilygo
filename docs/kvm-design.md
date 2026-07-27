@@ -40,9 +40,22 @@ on the desktop. The display becomes a desk KVM for the Claude fleet.
 **Shipped so far** (2026-07-27): the `focus.adapter` key with `auto` /
 `none` / a pinned name, honored by both triggers — device long-press
 (`input.hold="focus"`) and the desktop app's minimap click. `auto` resolves
-to `iterm2` on macOS and to nothing elsewhere, so KVM reports itself off at
-startup instead of failing per click. `exec` and `overrides` below are not
-implemented yet; the adapter list is `ADAPTERS` in `csb/focus.py`.
+to `iterm2` on macOS and `tmux` on Linux; Windows has no adapter, so KVM
+reports itself off at startup instead of failing per click. `ADAPTERS` in
+`csb/focus.py` is a real name -> function table, and adapters receive the
+per-session ctx below (pid, tty, cwd, session_id, env). `exec` and
+`overrides` are still unimplemented.
+
+**`auto` resolves to exactly one adapter — there is no fall-through chain.**
+A window raise isn't an alternative to a tmux pane select, it's its
+companion: in the tmux case both must happen, so a chain would need a
+"succeeded but keep going" state. Adapters compose internally instead, via
+`raise_window(pid)` — a plain helper, deliberately not an adapter (best
+effort, no session identity, its own return). So the `tmux` adapter never
+declines: pane select when the session is under tmux, window raise either
+way, doing less rather than nothing off tmux. It keeps that name because
+tmux is its distinguishing capability. `raise_window` is X11-only —
+GNOME/Wayland blocks programmatic activation by design, so it no-ops there.
 
 ## Config plane (override-only; auto is the default)
 

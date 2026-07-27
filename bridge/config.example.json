@@ -32,7 +32,7 @@
     "wait": "",
     "done": ""
   },
-  "_focus_comment": "KVM: raise a session's terminal. Triggered by a minimap cell click in the desktop app, and by a long-press on the device when input.hold=focus. adapter: auto (default; macOS -> iterm2, nothing elsewhere yet) | iterm2 | none. TO TURN KVM OFF set adapter to \"none\" — the minimap click then just selects the session. Exact session->PID binding needs hooks installed: python -m csb.hooks status. See docs/kvm-design.md",
+  "_focus_comment": "KVM: raise a session's terminal. Triggered by a minimap cell click in the desktop app, and by a long-press on the device when input.hold=focus. adapter: auto (default; macOS -> iterm2, Linux -> tmux, Windows none yet) | iterm2 | tmux | none. TO TURN KVM OFF set adapter to \"none\" — the minimap click then just selects the session. Note the tmux adapter never declines: it selects the pane when the session is under tmux and raises the window either way (window raise is X11-only, a no-op on Wayland). Exact session->PID binding needs hooks installed: python -m csb.hooks status. See docs/kvm-design.md",
   "focus": {
     "adapter": "auto"
   },

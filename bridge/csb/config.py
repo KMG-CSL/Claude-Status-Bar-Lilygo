@@ -102,9 +102,11 @@ DEFAULT_CONFIG = {
     },
     # KVM: raise a session's terminal from the display (long-press with
     # input.hold="focus") or from the desktop app (minimap cell click).
-    # "auto" = pick an adapter for this platform (macOS -> iterm2; nothing
-    # elsewhere yet, so KVM stays off and says so). "none" turns it off
-    # everywhere; when off, a minimap click selects the session instead.
+    # "auto" = pick an adapter for this platform: macOS -> iterm2,
+    # Linux -> tmux (selects the pane when the session is under tmux,
+    # raises the window either way). Windows has none yet, so KVM stays
+    # off there and says so. "none" turns it off everywhere; when off, a
+    # minimap click selects the session instead.
     "focus": {
         "adapter": "auto",
     },
