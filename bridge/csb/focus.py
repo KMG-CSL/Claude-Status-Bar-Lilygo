@@ -4,9 +4,14 @@ The device sends {"t":"focus","sl":<slot>} upstream on its focus gesture;
 the bridge resolves slot -> session -> claude PID -> tty and asks the
 terminal to foreground that exact tab (docs/kvm-design.md).
 
+Both triggers (device long-press, desktop-app minimap click) arrive here
+through the same message, so adapter work lands once and serves both.
+
 v1 scope, deliberately minimal:
 - adapter: iTerm2 only (AppleScript by tty) — the design doc's per-session
-  env detection and the tmux/linux adapters come later
+  env detection and the tmux/linux adapters come later. "auto" therefore
+  resolves to nothing off macOS: KVM reports itself off once at startup
+  rather than failing per click on a platform it can't serve yet.
 - PID binding: exact when the session arrived through a hook, which posts
   the claude process's own pid (hooks.py gen 2). Sessions seen only via
   transcript tailing, or whose recorded pid has since died, fall back to
@@ -17,9 +22,56 @@ Every attempt logs its outcome; a failure never retries (single shot).
 
 import os
 import subprocess
+import sys
 import time
 
 from .config import log
+
+# Adapters that exist today. "auto" maps to the one this platform can use;
+# kvm-design.md lists the rest (tmux, vscode, linux_generic, exec) as the
+# slots they drop into.
+ADAPTERS = ("iterm2",)
+_AUTO_BY_PLATFORM = {"darwin": "iterm2"}
+_announced = set()
+
+
+def adapter_for(cfg):
+    """-> adapter name for this config/platform, or "" when KVM is off.
+
+    "none" disables it outright; "auto" (the default) picks by platform and
+    yields "" where no adapter exists yet. An explicitly pinned adapter is
+    honored even on a platform we would not have chosen it for — pinning is
+    the user overriding our guess, not asking us to re-guess.
+    """
+    name = (cfg.get("focus") or {}).get("adapter", "auto")
+    if name == "none":
+        return ""
+    if name == "auto":
+        return _AUTO_BY_PLATFORM.get(sys.platform, "")
+    return name
+
+
+def enabled(cfg):
+    """True when a focus request would actually be attempted."""
+    return bool(adapter_for(cfg))
+
+
+def announce(cfg):
+    """Log the resolved adapter once per process, so 'why did nothing
+    happen when I clicked' is answerable from the console."""
+    ad = adapter_for(cfg)
+    key = ad or "off"
+    if key in _announced:
+        return
+    _announced.add(key)
+    if ad:
+        log("focus", f"KVM enabled (adapter {ad})")
+    else:
+        cfgd = (cfg.get("focus") or {}).get("adapter", "auto")
+        why = ("disabled by config" if cfgd == "none" else
+               f"no adapter for this platform ({sys.platform}) yet")
+        log("focus", f"KVM off: {why}. Set focus.adapter in config.json "
+                     "to override (see config.example.json).")
 
 # macOS first-AppleEvent to iTerm2 pops a one-time Automation permission
 # dialog — expected, approve it once.
@@ -87,6 +139,9 @@ def focus_tty(tty, runner=_run):
 
 def focus_slot(core, sl, runner=_run):
     """Resolve a display slot to a terminal and focus it. Logs outcome."""
+    if not enabled(core.cfg):
+        announce(core.cfg)
+        return False
     sid = None
     for s, e in core.slots.entries.items():
         if e.get("slot") == sl:

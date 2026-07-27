@@ -117,6 +117,8 @@ class BridgeCore:
             cfg.get("slots_file") or os.path.join(data_dir(), "slots.json"),
             max(8, cfg.get("max_sessions", 8)))
         self.chimer = Chimer(cfg)
+        from . import focus          # local: keeps subprocess/AppleScript
+        focus.announce(cfg)          # off the import path of every consumer
 
     def start_hooks(self):
         """Start the localhost hook listener (Item 1). Called by the

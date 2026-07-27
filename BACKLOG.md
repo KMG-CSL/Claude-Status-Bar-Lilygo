@@ -100,6 +100,16 @@ numeric context joins row 5 on the right.
 - Flash-on-wait-edge: shipped in firmware (1.6s white blink), unjudged —
   user hasn't caught one live yet.
 
+## KVM: Linux / tmux adapter
+`focus.adapter=auto` resolves to nothing off macOS today, so KVM is off on
+the Ubuntu box. The AppleScript-by-tty approach doesn't translate — going
+through D-Bus/wmctrl to raise a specific *tab* is the hard part, and the
+tmux path sidesteps it entirely: `tmux list-panes -a -F "#{pane_tty} ..."`,
+match the session's tty, `switch-client`/`select-window`. That composes
+with an outer adapter (raise the terminal window, then select the pane).
+Slot to fill: `ADAPTERS` in `csb/focus.py`; both triggers already route
+through `focus_slot`, so the adapter is the only new code.
+
 ## Second display / old-revision touch validation
 The AXS15231B (old hw revision) touch path in touch_drv.h is implemented from
 LilyGo's example but untested on real hardware. Flash display #2 when it

@@ -23,6 +23,7 @@ import tkinter as tk
 from tkinter import messagebox
 
 import claude_bar_bridge as bridge
+from csb import focus
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 LOGO_BIN = os.path.join(bridge.data_dir(), "logo.bin")
@@ -180,8 +181,9 @@ class App:
             self.draw()
 
     def on_click(self, ev):
-        """Minimap cell click = KVM focus that terminal. Right side click
-        = cycle sessions (the panel's tap). Usage page click = back."""
+        """Minimap cell click = KVM focus that terminal, or — when KVM is
+        off (focus.adapter) — select that session. Right side click =
+        cycle sessions (the panel's tap). Usage page click = back."""
         pkt = self.bt.last_pkt
         if self.page == 1:
             self.toggle_page()
@@ -196,6 +198,14 @@ class App:
                     break
             s = pkt["ses"][idx]
             sl = s.get("sl", idx)
+            if not focus.enabled(self.bt.core.cfg):
+                # KVM off: the gesture still means "show me this one"
+                # rather than nothing at all
+                self._act_local = idx
+                self.status_lbl.config(
+                    text=f"{chr(65 + sl)}: {s.get('pj', '?')}")
+                self.draw()
+                return
             self.status_lbl.config(
                 text=f"focusing {chr(65 + sl)}: {s.get('pj', '?')}...")
             threading.Thread(

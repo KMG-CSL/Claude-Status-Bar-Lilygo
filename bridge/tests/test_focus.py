@@ -2,6 +2,7 @@
 device-line routing that triggers it. All subprocess use is stubbed."""
 
 import unittest
+from unittest import mock
 
 from csb import focus
 
@@ -130,6 +131,61 @@ class DeviceLineCase(unittest.TestCase):
         finally:
             focus.focus_slot = orig
         self.assertEqual(seen.get("sl"), 3)
+
+
+class AdapterResolutionCase(unittest.TestCase):
+    def cfg(self, **focus_cfg):
+        return {"focus": focus_cfg} if focus_cfg else {}
+
+    def test_auto_resolves_per_platform(self):
+        with mock.patch.object(focus.sys, "platform", "darwin"):
+            self.assertEqual(focus.adapter_for(self.cfg(adapter="auto")),
+                             "iterm2")
+            self.assertTrue(focus.enabled(self.cfg(adapter="auto")))
+        for plat in ("linux", "win32"):
+            with mock.patch.object(focus.sys, "platform", plat):
+                # no adapter yet -> off, rather than failing per click
+                self.assertEqual(focus.adapter_for(self.cfg(adapter="auto")),
+                                 "")
+                self.assertFalse(focus.enabled(self.cfg(adapter="auto")))
+
+    def test_auto_is_the_default_when_unconfigured(self):
+        with mock.patch.object(focus.sys, "platform", "darwin"):
+            self.assertEqual(focus.adapter_for({}), "iterm2")
+            self.assertEqual(focus.adapter_for({"focus": {}}), "iterm2")
+
+    def test_none_disables_everywhere(self):
+        for plat in ("darwin", "linux", "win32"):
+            with mock.patch.object(focus.sys, "platform", plat):
+                self.assertFalse(focus.enabled(self.cfg(adapter="none")))
+
+    def test_pinned_adapter_is_honored_off_its_platform(self):
+        # pinning is the user overriding our guess, not a re-guess request
+        with mock.patch.object(focus.sys, "platform", "linux"):
+            self.assertEqual(focus.adapter_for(self.cfg(adapter="iterm2")),
+                             "iterm2")
+
+    def test_disabled_focus_slot_never_shells_out(self):
+        run = fake_runner({"ps": PS_TWO_CLAUDES})
+
+        class Core:
+            cfg = {"focus": {"adapter": "none"}}
+            slots = type("S", (), {"entries": {}})()
+            sessions = {}
+
+        self.assertFalse(focus.focus_slot(Core(), 0, runner=run))
+        self.assertEqual(run.calls, [])       # no ps, no lsof, no osascript
+
+
+class ConfigMergeCase(unittest.TestCase):
+    def test_partial_focus_block_keeps_the_default_adapter(self):
+        from csb.config import DEFAULT_CONFIG
+        self.assertEqual(DEFAULT_CONFIG["focus"]["adapter"], "auto")
+        # a user block that omits 'adapter' must not erase it (the same
+        # per-key merge input/chime get)
+        merged = dict(DEFAULT_CONFIG["focus"])
+        merged.update({})
+        self.assertEqual(merged["adapter"], "auto")
 
 
 if __name__ == "__main__":

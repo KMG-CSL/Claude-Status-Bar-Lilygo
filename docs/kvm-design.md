@@ -37,6 +37,13 @@ on the desktop. The display becomes a desk KVM for the Claude fleet.
 - **exec** — escape hatch: user command template with `{tty} {pid} {cwd}
   {session_id}` substitution.
 
+**Shipped so far** (2026-07-27): the `focus.adapter` key with `auto` /
+`none` / a pinned name, honored by both triggers — device long-press
+(`input.hold="focus"`) and the desktop app's minimap click. `auto` resolves
+to `iterm2` on macOS and to nothing elsewhere, so KVM reports itself off at
+startup instead of failing per click. `exec` and `overrides` below are not
+implemented yet; the adapter list is `ADAPTERS` in `csb/focus.py`.
+
 ## Config plane (override-only; auto is the default)
 
 ```json

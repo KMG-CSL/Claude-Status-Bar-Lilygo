@@ -32,8 +32,11 @@
     "wait": "",
     "done": ""
   },
-  "_input_comment": "actions: cycle | page | usage | flip | focus | none (pushed to display on connect)",
-  "_focus_comment": "focus = KVM: hold on a session raises its terminal (macOS/iTerm2 only today; elsewhere it logs why and does nothing). For the KVM layout set hold=focus and boot_short=usage — see docs/kvm-design.md. Needs hooks installed for exact session->PID binding: python -m csb.hooks status",
+  "_focus_comment": "KVM: raise a session's terminal. Triggered by a minimap cell click in the desktop app, and by a long-press on the device when input.hold=focus. adapter: auto (default; macOS -> iterm2, nothing elsewhere yet) | iterm2 | none. TO TURN KVM OFF set adapter to \"none\" — the minimap click then just selects the session. Exact session->PID binding needs hooks installed: python -m csb.hooks status. See docs/kvm-design.md",
+  "focus": {
+    "adapter": "auto"
+  },
+  "_input_comment": "actions: cycle | page | usage | flip | focus | none (pushed to display on connect). For the KVM layout: hold=focus, boot_short=usage",
   "input": {
     "tap": "cycle",
     "swipe": "cycle",

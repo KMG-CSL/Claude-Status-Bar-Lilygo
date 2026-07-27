@@ -100,6 +100,14 @@ DEFAULT_CONFIG = {
         "wait": "",
         "done": "",
     },
+    # KVM: raise a session's terminal from the display (long-press with
+    # input.hold="focus") or from the desktop app (minimap cell click).
+    # "auto" = pick an adapter for this platform (macOS -> iterm2; nothing
+    # elsewhere yet, so KVM stays off and says so). "none" turns it off
+    # everywhere; when off, a minimap click selects the session instead.
+    "focus": {
+        "adapter": "auto",
+    },
     # input bindings, pushed to the display on connect. Actions:
     # "cycle" (next/prev session), "page" (toggle status/usage),
     # "usage" (alias of page), "flip" (rotate 180),
@@ -187,6 +195,7 @@ def load_config():
     cfg = dict(DEFAULT_CONFIG)
     cfg["input"] = dict(DEFAULT_CONFIG["input"])
     cfg["chime"] = dict(DEFAULT_CONFIG["chime"])
+    cfg["focus"] = dict(DEFAULT_CONFIG["focus"])
     path = os.path.join(data_dir(), "config.json")
     if os.path.exists(path):
         try:
@@ -201,9 +210,12 @@ def load_config():
             inp.update(user.get("input") or {})
             ch = dict(DEFAULT_CONFIG["chime"])
             ch.update(user.get("chime") or {})
+            fo = dict(DEFAULT_CONFIG["focus"])
+            fo.update(user.get("focus") or {})
             cfg.update(user)
             cfg["input"] = inp
             cfg["chime"] = ch
+            cfg["focus"] = fo
             # honor a user-tuned legacy wait_tool_s as the approval debounce
             # unless the new key was set explicitly
             if "wait_tool_s" in user and "approval_silence_s" not in user:
