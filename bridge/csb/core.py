@@ -55,12 +55,19 @@ def build_packet(sessions, cfg, usage, now=None, slots=None, chimer=None):
         # Rate-limited / error waits are excluded from the preference (§e):
         # a limited session would otherwise pin act for its whole countdown
         # and starve a genuine approval prompt appearing later.
+        # A stale wait starves it just as effectively: an approval prompt
+        # abandoned an hour ago outranked a session actively running, and
+        # with a long active_window_min several of them queue up. So a wait
+        # only earns auto-follow while still fresh, and among equals the
+        # most recently active wins rather than the oldest (first_seen order
+        # meant the stalest waiter held the display). This only picks which
+        # session is *featured* — every wait keeps its cell and its banner.
+        fresh_cut = now - cfg.get("wait_follow_stale_s", 300)
         waiting = [i for i, r in enumerate(states)
-                   if r.st == "wait" and not r.lim and not r.err]
-        if waiting:
-            act = waiting[0]
-        else:
-            act = max(range(len(live)), key=lambda i: live[i].mtime())
+                   if r.st == "wait" and not r.lim and not r.err
+                   and max(live[i].mtime(), live[i].hook_last) > fresh_cut]
+        pool = waiting if waiting else range(len(live))
+        act = max(pool, key=lambda i: max(live[i].mtime(), live[i].hook_last))
     # stable slot identity (additive "sl"): assigned at first display,
     # kept for the session's lifetime — ses[] order stays first_seen as
     # today, sl is metadata for displays that want stable letters
