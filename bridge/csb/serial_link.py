@@ -7,6 +7,9 @@ import time
 
 class SerialLink:
     VID_PID = [(0x303A, 0x1001)]   # Espressif native USB
+    # USB serial devices that are never the display: the fallback below must not grab them
+    # (a Loupedeck CT/Live presents as a usbmodem port and was taken over when the LilyGo was unplugged)
+    NOT_A_DISPLAY_VIDS = {0x2EC2}  # Loupedeck
 
     def __init__(self, port, baud):
         self.port_cfg = port
@@ -16,7 +19,8 @@ class SerialLink:
 
     def _detect(self):
         from serial.tools import list_ports
-        ports = list(list_ports.comports())
+        ports = [p for p in list_ports.comports()
+                 if p.vid not in self.NOT_A_DISPLAY_VIDS]
         for p in ports:
             if (p.vid, p.pid) in self.VID_PID:
                 return p.device

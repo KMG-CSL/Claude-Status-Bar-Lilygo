@@ -42,7 +42,7 @@ from .config import log
 # adapters are defined. "auto" maps to the one this platform can use;
 # kvm-design.md lists the rest (vscode, ghostty, exec) as slots to fill.
 ADAPTERS = {}
-_AUTO_BY_PLATFORM = {"darwin": "iterm2", "linux": "tmux"}
+_AUTO_BY_PLATFORM = {"darwin": "macos", "linux": "tmux"}
 _announced = set()
 
 
@@ -100,6 +100,26 @@ on run argv
             return "ok"
           end if
         end repeat
+      end repeat
+    end repeat
+  end tell
+  return "no-session"
+end run
+"""
+
+
+_TERMINAL_SCRIPT = """
+on run argv
+  set wanted to item 1 of argv
+  tell application "Terminal"
+    repeat with w in windows
+      repeat with t in tabs of w
+        if tty of t is wanted then
+          set selected of t to true
+          set index of w to 1
+          activate
+          return "ok"
+        end if
       end repeat
     end repeat
   end tell
@@ -222,6 +242,32 @@ def focus_iterm2(ctx, runner=_run):
     return ok, (r.stdout or r.stderr or "").strip()
 
 
+def focus_terminal(ctx, runner=_run):
+    """Apple Terminal: every tab has a tty, so the same tty match works."""
+    r = runner(["osascript", "-e", _TERMINAL_SCRIPT, ctx["tty"]], timeout=10)
+    ok = r.returncode == 0 and "ok" in (r.stdout or "")
+    return ok, (r.stdout or r.stderr or "").strip()
+
+
+def focus_macos(ctx, runner=_run):
+    """macOS default: pick the terminal from the session's own TERM_PROGRAM
+    (Apple_Terminal or iTerm.app), so Terminal and iTerm2 sessions can mix.
+    Unknown host: try Terminal, then iTerm2."""
+    prog = (ctx.get("env") or {}).get("TERM_PROGRAM", "")
+    if prog == "iTerm.app":
+        order = (focus_iterm2,)
+    elif prog == "Apple_Terminal":
+        order = (focus_terminal,)
+    else:
+        order = (focus_terminal, focus_iterm2)
+    detail = ""
+    for fn in order:
+        ok, detail = fn(ctx, runner=runner)
+        if ok:
+            return ok, detail
+    return False, detail
+
+
 def tmux_pane_for(tty, runner=_run):
     """-> "session:window.pane" whose pane_tty matches, or ""."""
     out = runner(["tmux", "list-panes", "-a", "-F",
@@ -334,6 +380,8 @@ def focus_slot(core, sl, runner=_run):
 
 # populated last: the adapters must exist before they can be registered
 ADAPTERS.update({
+    "macos": focus_macos,
+    "terminal": focus_terminal,
     "iterm2": focus_iterm2,
     "tmux": focus_tmux,
 })

@@ -115,7 +115,7 @@ DEFAULT_CONFIG = {
     # input bindings, pushed to the display on connect. Actions:
     # "cycle" (next/prev session), "page" (toggle status/usage),
     # "usage" (alias of page), "flip" (rotate 180),
-    # "focus" (KVM: raise that session's terminal — macOS/iTerm2 only
+    # "focus" (KVM: raise that session's terminal — macOS Terminal or iTerm2, chosen per session
     # today, a no-op with a logged reason elsewhere), "none".
     # Defaults stay cross-platform; the KVM layout is
     # hold=focus + boot_short=usage (see docs/kvm-design.md).

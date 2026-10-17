@@ -199,8 +199,31 @@ class BridgeCore:
             session.apply_hook(ev)
         self.usage.add_events(new_usage)
         self._limit_alerts(now)
-        return build_packet(self.sessions, self.cfg, self.usage, now=now,
-                            slots=self.slots, chimer=self.chimer)
+        packet = build_packet(self.sessions, self.cfg, self.usage, now=now,
+                              slots=self.slots, chimer=self.chimer)
+        if self.hooks is not None:
+            self._serve_local_clients(packet)
+        return packet
+
+    def _serve_local_clients(self, packet):
+        """Publish the packet for GET /packet and run queued focus requests
+        (POST /focus) on this, the main, thread."""
+        try:
+            self.hooks.latest = json.dumps(packet, separators=(",", ":")).encode()
+        except (TypeError, ValueError):
+            pass
+        cmd = None
+        while True:              # coalesce: only the newest request matters
+            try:
+                cmd = self.hooks.commands.get_nowait()
+            except queue.Empty:
+                break
+        if cmd and cmd.get("t") == "focus":
+            try:
+                from . import focus
+                focus.focus_slot(self, int(cmd.get("sl", -1)))
+            except Exception as e:   # a focus failure must never stop the loop
+                log("focus", f"request failed: {e}")
 
     def _drain_hooks(self, now):
         """-> [(session, event)] for every queued hook event. Events route

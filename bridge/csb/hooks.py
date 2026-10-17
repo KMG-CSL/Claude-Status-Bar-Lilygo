@@ -81,6 +81,12 @@ class HookListener:
     def __init__(self, cfg=None):
         cfg = cfg or {}
         self.queue = queue.Queue()
+        # read-only consumers (e.g. a Loupedeck deck): BridgeCore.step()
+        # publishes the latest status packet here as JSON bytes, served on
+        # GET /packet; POST /focus?sl=N queues a focus request that step()
+        # runs on the main thread (never from the HTTP thread)
+        self.latest = None
+        self.commands = queue.Queue(maxsize=8)
         handler = self._handler_class()
         preferred = int(cfg.get("hook_port", 45732) or 0)
         try:
@@ -113,9 +119,41 @@ class HookListener:
 
     def _handler_class(self):
         q = self.queue
+        listener = self
 
         class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                if urlparse(self.path).path != "/packet":
+                    self.send_error(404)
+                    return
+                body = listener.latest
+                if body is None:
+                    self.send_error(503, "no packet yet")
+                    return
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
             def do_POST(self):
+                parsed = urlparse(self.path)
+                if parsed.path == "/focus":
+                    raw = parse_qs(parsed.query).get("sl", [""])[0]
+                    try:
+                        sl = int(raw) if raw.isascii() and raw.isdigit() else -1
+                    except ValueError:
+                        sl = -1
+                    if not 0 <= sl < 64:
+                        self.send_response(400)
+                    else:
+                        try:
+                            listener.commands.put_nowait({"t": "focus", "sl": sl})
+                            self.send_response(204)
+                        except queue.Full:
+                            self.send_response(429)
+                    self.end_headers()
+                    return
                 payload = None
                 try:
                     n = int(self.headers.get("Content-Length") or 0)
