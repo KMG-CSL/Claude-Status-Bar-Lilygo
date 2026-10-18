@@ -78,7 +78,7 @@ fi
 cat > "$CFG" <<EOF
 board_manager:
   additional_urls:
-    - https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+    - https://espressif.github.io/arduino-esp32/package_esp32_index.json
 directories:
   data: $BUILD/data
   downloads: $BUILD/downloads

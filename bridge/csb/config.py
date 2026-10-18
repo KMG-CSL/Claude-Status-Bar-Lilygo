@@ -72,6 +72,8 @@ DEFAULT_CONFIG = {
     "max_sessions": 8,
     "active_window_min": 30,     # sessions modified within N minutes are shown
     "idle_after_s": 120,         # no real events for this long -> idle/done
+    "wait_follow_stale_s": 300,  # a wait stops winning auto-follow once this
+                                 # stale (it keeps its cell + banner regardless)
     "wait_tool_s": 20,           # legacy alias of approval_silence_s (kept for old configs)
     "approval_silence_s": 20,    # pending tool + this much write-silence -> "needs approval"
     "approval_confirm_s": 0.5,   # poll cadence while within 1s of the approval flip
@@ -113,7 +115,7 @@ DEFAULT_CONFIG = {
     # input bindings, pushed to the display on connect. Actions:
     # "cycle" (next/prev session), "page" (toggle status/usage),
     # "usage" (alias of page), "flip" (rotate 180),
-    # "focus" (KVM: raise that session's terminal — macOS/iTerm2 only
+    # "focus" (KVM: raise that session's terminal — macOS Terminal or iTerm2, chosen per session
     # today, a no-op with a logged reason elsewhere), "none".
     # Defaults stay cross-platform; the KVM layout is
     # hold=focus + boot_short=usage (see docs/kvm-design.md).

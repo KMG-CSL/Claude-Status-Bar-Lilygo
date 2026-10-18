@@ -289,7 +289,7 @@ class AdapterResolutionCase(unittest.TestCase):
     def test_auto_resolves_per_platform(self):
         with mock.patch.object(focus.sys, "platform", "darwin"):
             self.assertEqual(focus.adapter_for(self.cfg(adapter="auto")),
-                             "iterm2")
+                             "macos")
             self.assertTrue(focus.enabled(self.cfg(adapter="auto")))
         with mock.patch.object(focus.sys, "platform", "linux"):
             self.assertEqual(focus.adapter_for(self.cfg(adapter="auto")),
@@ -302,8 +302,31 @@ class AdapterResolutionCase(unittest.TestCase):
 
     def test_auto_is_the_default_when_unconfigured(self):
         with mock.patch.object(focus.sys, "platform", "darwin"):
-            self.assertEqual(focus.adapter_for({}), "iterm2")
-            self.assertEqual(focus.adapter_for({"focus": {}}), "iterm2")
+            self.assertEqual(focus.adapter_for({}), "macos")
+            self.assertEqual(focus.adapter_for({"focus": {}}), "macos")
+
+    def test_macos_picks_the_terminal_from_term_program(self):
+        calls = []
+
+        def fake(name, ok):
+            def fn(ctx, runner=None):
+                calls.append(name)
+                return ok, name
+            return fn
+        with mock.patch.object(focus, "focus_terminal", fake("terminal", True)), \
+             mock.patch.object(focus, "focus_iterm2", fake("iterm2", True)):
+            calls.clear()
+            focus.focus_macos({"tty": "/dev/ttys001", "env": {"TERM_PROGRAM": "Apple_Terminal"}})
+            self.assertEqual(calls, ["terminal"])
+            calls.clear()
+            focus.focus_macos({"tty": "/dev/ttys001", "env": {"TERM_PROGRAM": "iTerm.app"}})
+            self.assertEqual(calls, ["iterm2"])
+        with mock.patch.object(focus, "focus_terminal", fake("terminal", False)), \
+             mock.patch.object(focus, "focus_iterm2", fake("iterm2", True)):
+            calls.clear()   # unknown host: Terminal first, then iTerm2
+            ok, _ = focus.focus_macos({"tty": "/dev/ttys001", "env": {}})
+            self.assertEqual(calls, ["terminal", "iterm2"])
+            self.assertTrue(ok)
 
     def test_none_disables_everywhere(self):
         for plat in ("darwin", "linux", "win32"):
