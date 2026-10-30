@@ -7,6 +7,7 @@ import json
 import os
 import sys
 import tempfile
+import threading
 import time
 import unittest
 
@@ -380,6 +381,34 @@ class PeersJumpTest(Base):
         self.assertFalse(focus.can_act(lin, {"TERM": "xterm-256color"}))  # Ptyxis
         self.assertFalse(focus.can_act({"focus": {"adapter": "none"}},
                                        {"TMUX": "x"}))
+
+
+class JumpCacheTest(Base):
+    def test_probe_is_async_keyed_by_process_identity_and_retried(self):
+        from unittest import mock
+        from csb import core as core_mod
+        cfg = base_cfg(focus={"adapter": "tmux"})
+        core = BridgeCore(cfg, usage=stub_usage(cfg))
+        s = self.sess([human(T0)])
+        s.reg = {"pid": 7, "procStart": "111"}
+        envs = {"v": {"TMUX": "/tmp/t,1,0"}}
+        with mock.patch.object(focus, "env_of", lambda pid: envs["v"]):
+            def settle():
+                for t in list(threading.enumerate()):
+                    if t.name == "csb-jump-probe":
+                        t.join(2)
+            self.assertFalse(core._can_jump(s, now=T0))   # miss: probing
+            settle()
+            self.assertTrue(core._can_jump(s, now=T0))    # probed: tmux
+            s.reg = {"pid": 7, "procStart": "222"}        # pid reused
+            envs["v"] = {}                                 # not in tmux
+            self.assertFalse(core._can_jump(s, now=T0))
+            settle()
+            self.assertFalse(core._can_jump(s, now=T0 + 1))
+            envs["v"] = {"TMUX": "x"}                      # moved into tmux
+            core._can_jump(s, now=T0 + core_mod.JUMP_RETRY_S + 5)
+            settle()
+            self.assertTrue(core._can_jump(s, now=T0 + core_mod.JUMP_RETRY_S + 6))
 
 
 # -------------------------------------------------------------------- web

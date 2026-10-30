@@ -5,6 +5,7 @@ Transport (serial vs stdout) stays with the caller."""
 import json
 import os
 import queue
+import threading
 import time
 
 from . import attention, statusline
@@ -19,6 +20,7 @@ from .slots import SlotAllocator
 from .usage import UsageTracker
 
 RESCAN_INTERVAL_S = 15
+JUMP_RETRY_S = 60      # re-probe a session whose terminal looked unjumpable
 DISCOVERY_WINDOW_S = 7 * 86400   # ignore transcripts older than a week
 
 
@@ -156,7 +158,11 @@ class BridgeCore:
         self.registry_mode = False
         self.board_doc = None       # newest web-board document
         self._reg_live = None       # newest registry read ({sid: entry})
-        self._jump = {}             # pid -> can a focus adapter act on it
+        # (pid, procStart) -> (can a focus adapter act on it, checked ts);
+        # probed off-thread — env reads shell out to ps on macOS
+        self._jump = {}
+        self._jump_lock = threading.Lock()
+        self._jump_probing = set()
         from . import focus          # local: keeps subprocess/AppleScript
         focus.announce(cfg)          # off the import path of every consumer
 
@@ -288,24 +294,48 @@ class BridgeCore:
             if path not in bound:
                 s.reg = None
 
-    def _can_jump(self, s):
-        """Per-pid, computed once (reads the process env): can the focus
-        adapter act on this session's terminal?"""
+    def _jump_key(self, s):
+        reg = s.reg or {}
+        pid = reg.get("pid") or s.claude_pid
+        # process identity, not just the pid: a reused pid is a new key
+        return (pid, str(reg.get("procStart") or "")) if pid else None
+
+    def _can_jump(self, s, now=None):
+        """Can the focus adapter act on this session's terminal? Answered
+        from a cache keyed by process identity; a miss (or a failed read
+        older than JUMP_RETRY_S) starts a background probe and answers
+        False meanwhile — the bridge thread never waits on ps."""
         from . import focus
-        pid = (s.reg or {}).get("pid") or s.claude_pid
-        if not pid or not focus.enabled(self.cfg):
+        key = self._jump_key(s)
+        if key is None or not focus.enabled(self.cfg):
             return False
-        if pid not in self._jump:
+        now = time.time() if now is None else now
+        with self._jump_lock:
+            hit = self._jump.get(key)
+            if hit is not None and (hit[0] or now - hit[1] < JUMP_RETRY_S):
+                return hit[0]
+            if key in self._jump_probing:
+                return bool(hit and hit[0])
+            self._jump_probing.add(key)
+
+        def probe():
             try:
-                self._jump[pid] = focus.can_act(self.cfg, focus.env_of(pid))
+                ok = focus.can_act(self.cfg, focus.env_of(key[0]))
             except Exception:
-                self._jump[pid] = False
-        return self._jump[pid]
+                ok = False
+            with self._jump_lock:
+                self._jump[key] = (ok, now)    # same clock as the check
+                self._jump_probing.discard(key)
+
+        threading.Thread(target=probe, name="csb-jump-probe",
+                         daemon=True).start()
+        return bool(hit and hit[0])
 
     def _publish_board(self, live, states, entries, now):
         from . import focus
-        pids = {(s.reg or {}).get("pid") or s.claude_pid for s in live}
-        self._jump = {p: v for p, v in self._jump.items() if p in pids}
+        keys = {self._jump_key(s) for s in live}
+        with self._jump_lock:
+            self._jump = {k: v for k, v in self._jump.items() if k in keys}
         self.board_doc = attention.build_board(
             live, states, entries, self.cfg, now=now,
             focus=focus.enabled(self.cfg), registry=self._reg_live,

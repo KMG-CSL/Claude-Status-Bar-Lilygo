@@ -37,7 +37,8 @@
   /* wide screens: lanes side by side (kanban); empty and collapsed lanes
      shrink to a header so the live ones get the room. Narrow: stacked. */
   @media (min-width: 1000px) {
-    main { display: flex; gap: 14px; align-items: flex-start; }
+    main { display: flex; flex-wrap: wrap; gap: 14px;
+           align-items: flex-start; }
     .lane { flex: 1 1 0; min-width: 260px; margin-top: 6px; }
     .lane.empty, .lane.collapsed { flex: 0 0 auto; min-width: 0;
                                    width: 118px; }
@@ -246,7 +247,7 @@ function row(who, text, cls) {
 const REPLY_COLLAPSED = 280;
 function plain(t) {
   return t
-    .replace(/```[\s\S]*?```/g, " ")              // fenced code blocks
+    .replace(/```[^\n]*\n?([\s\S]*?)```/g, "$1")   // fences: keep the code
     .replace(/`([^`]*)`/g, "$1")                   // inline code
     .replace(/(\*\*|__)(.+?)\1/g, "$2")            // bold
     .replace(/(^|[^\w*])[*_]([^*_\n]+)[*_](?![\w*])/g, "$1$2") // italics
