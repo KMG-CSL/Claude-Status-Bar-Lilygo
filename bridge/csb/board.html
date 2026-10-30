@@ -252,16 +252,21 @@ function plain(t) {
   const code = /```(?:[^\n`]*\n)?([\s\S]*?)```|`([^`\n]*)`/g;
   let out = "", last = 0, m;
   while ((m = code.exec(t)) !== null) {
-    out += prose(t.slice(last, m.index)) + (m[1] !== undefined ? m[1] : m[2]);
+    out += prose(t.slice(last, m.index), atLineStart(t, last)) +
+      (m[1] !== undefined ? m[1] : m[2]);
     last = code.lastIndex;
   }
-  return (out + prose(t.slice(last))).trim();
+  return (out + prose(t.slice(last), atLineStart(t, last))).trim();
 }
-function prose(s) {
+function atLineStart(t, i) { return i === 0 || t[i - 1] === "\n"; }
+function prose(s, lineStart) {
   return s
     .replace(/(\*\*|__)(.+?)\1/g, "$2")                          // bold
     .replace(/(^|[^\w*])[*_]([^*_\n]+)[*_](?![\w*])/g, "$1$2")   // italics
-    .replace(/^#{1,6}\s+/gm, "");                                // headings
+    // headings only at REAL line starts: a slice that begins right after
+    // a code span (`C`# ...) is mid-line
+    .replace(/(^|\n)#{1,6}\s+/g, (all, nl, off) =>
+      off === 0 && nl === "" && !lineStart ? all : nl);
 }
 function lastPara(t) {
   const paras = plain(t).split(/\n\s*\n/).map(p => p.trim()).filter(Boolean);
