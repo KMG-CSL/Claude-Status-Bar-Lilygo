@@ -13,7 +13,7 @@ from .config import data_dir, log
 from .engine import LONG_TOOLS, derive
 from .fmt import fmt_countdown
 from .limits import AlertLog, is_expired
-from .registry import Registry, transcript_path
+from .registry import Registry, project_dir_name, transcript_path
 from .session import Session, find_transcripts
 from .slots import SlotAllocator
 from .usage import UsageTracker
@@ -259,7 +259,13 @@ class BridgeCore:
         if live is None:
             return
         bound = set()
+        ignore = [p for p in self.cfg.get("ignore_projects", ()) if p]
         for sid, e in live.items():
+            # same self-probe filter fallback discovery applies to the
+            # project dir name (find_transcripts)
+            pdir = project_dir_name(e.get("cwd"))
+            if any(p in pdir for p in ignore):
+                continue
             path = self._sid_map.get(sid) or \
                 transcript_path(e, self.cfg["roots"])
             s = self.sessions.get(path)

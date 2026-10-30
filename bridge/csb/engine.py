@@ -82,6 +82,12 @@ def _apply_registry(session, r, cfg, now, hooky):
         return StateResult("wait", "", td[:32],
                            max(0, int(now - changed)) if changed else 0,
                            0, "", "r")
+    if reg.get("status") == "busy" and r.st == "wait" and r.src == "t" \
+            and r.tl and r.tl not in ("Question", "AskUserQuestion"):
+        # the write-silence approval heuristic guessed "permission prompt"
+        # for a long tool; the process says it is working and no dialog
+        # is up (waitingFor is null) — it is executing
+        return r._replace(st="tool", src="r")
     if reg.get("status") == "busy" and r.st in ("done", "idle"):
         session.done_latch = None          # the turn is demonstrably live
         session.fin = ""

@@ -171,6 +171,24 @@ class UnreadLanesTest(Base):
         s.task_ids.clear()                        # last worker reported back
         self.assertEqual(attention.chime_state(s, r, self.cfg, T0 + 7), "done")
 
+    def test_abandoned_delegation_stops_pinning_running(self):
+        s = self.sess([human(T0), assistant_tool_use(T0 + 1, "Task", "tk")])
+        s.apply_hook(ev("UserPromptSubmit", T0))
+        s.apply_hook(ev("Stop", T0 + 5))          # tool_result never comes
+        later = T0 + 5 + attention.DELEGATION_GRACE_S + 1
+        r = derive(s, self.cfg, later)
+        self.assertNotEqual(attention.lane_of(s, r, self.cfg, later),
+                            "running")
+
+    def test_registry_busy_beats_silence_heuristic_wait(self):
+        s = self.sess([human(T0), assistant_tool_use(T0 + 1, "Bash", "b1")])
+        s.reg = {"status": "busy", "waitingFor": None}
+        r = derive(s, self.cfg, T0 + 1 + self.cfg["approval_silence_s"] + 5)
+        self.assertEqual((r.st, r.src), ("tool", "r"))
+        s.reg = None                              # without registry: a guess
+        r = derive(s, self.cfg, T0 + 1 + self.cfg["approval_silence_s"] + 5)
+        self.assertEqual(r.st, "wait")
+
     def test_quiet_for_hours_parks_and_keeps_unread(self):
         s, r = self.done_session([human(T0), assistant_text(T0 + 4, "ok")])
         later = T0 + self.cfg["parked_after_s"] + 60
@@ -217,6 +235,35 @@ class RegistryTest(Base):
                                            if pid == 13 else
                                            "Fri Oct 30 20:47:46 2026"))
         self.assertEqual(sorted(reg.read()), ["s-live"])
+
+    def test_mid_rewrite_read_keeps_last_good_entry(self):
+        d = self.entry(31, "s-a")
+        reg = Registry({"registry_dir": d}, alive=lambda p: True,
+                       lstart=lambda p: "")
+        self.assertEqual(list(reg.read()), ["s-a"])
+        with open(os.path.join(d, "31.json"), "w") as f:
+            f.write('{"pid": 31, "sess')                 # torn write
+        self.assertEqual(list(reg.read()), ["s-a"])
+        os.remove(os.path.join(d, "31.json"))
+        self.assertEqual(reg.read(), {})
+
+    def test_pid_reuse_is_caught_on_revalidation(self):
+        d = self.entry(41, "s-a")
+        start = {"v": "Fri Oct 30 20:47:46 2026"}
+        reg = Registry({"registry_dir": d}, alive=lambda p: True,
+                       lstart=lambda p: start["v"])
+        e = reg.read()["s-a"]
+        start["v"] = "Sat Oct 31 09:00:00 2026"      # crashed, pid reused
+        self.assertTrue(reg._live(e, now=time.time() + 1))   # cached
+        self.assertFalse(reg._live(e, now=time.time() + 120))
+
+    def test_registry_mode_honors_ignore_projects(self):
+        d = self.entry(51, "s-probe", cwd="/private/tmp/claude-123/x")
+        cfg = base_cfg(roots=[self.tmp.name], registry_dir=d)
+        core = BridgeCore(cfg, usage=stub_usage(cfg), registry=Registry(
+            cfg, alive=lambda p: True, lstart=lambda p: ""))
+        core._publish_board = lambda *a, now: None
+        self.assertEqual(core.step(now=T0)["ses"], [])
 
     def test_transcript_path_sanitizes_cwd(self):
         p = transcript_path({"sessionId": "abc", "cwd": "/Users/x/my.repo"},

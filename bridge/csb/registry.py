@@ -19,10 +19,17 @@ import os
 import re
 import subprocess
 import sys
+import time
 
 from .config import CLAUDE_DIR, debug
 
 _SANITIZE = re.compile(r"[^A-Za-z0-9]")
+REVALIDATE_S = 60
+
+
+def project_dir_name(cwd):
+    """The projects/ directory name Claude Code derives from a cwd."""
+    return _SANITIZE.sub("-", cwd or "")
 
 
 def registry_dir(cfg=None):
@@ -66,7 +73,8 @@ class Registry:
         self.dir = registry_dir(cfg)
         self._alive = alive
         self._lstart = lstart
-        self._verified = {}          # (pid, procStart) -> bool
+        self._verified = {}          # (pid, procStart) -> (bool, checked ts)
+        self._last_good = {}         # file path -> last parsed entry
 
     def available(self):
         return os.path.isdir(self.dir)
@@ -77,14 +85,20 @@ class Registry:
         if not self.available():
             return None
         live = {}
-        for path in glob.glob(os.path.join(self.dir, "*.json")):
+        paths = glob.glob(os.path.join(self.dir, "*.json"))
+        for path in paths:
             try:
                 with open(path, "r", encoding="utf-8") as f:
                     e = json.load(f)
+                if not isinstance(e, dict):
+                    raise ValueError("not an object")
+                self._last_good[path] = e
             except Exception:
-                continue             # mid-rewrite or foreign file
-            if not isinstance(e, dict):
-                continue
+                # caught mid-rewrite: reuse the last good parse (still
+                # liveness-checked below) instead of blinking it off
+                e = self._last_good.get(path)
+                if e is None:
+                    continue
             pid, sid = e.get("pid"), e.get("sessionId")
             if not isinstance(pid, int) or not sid or not self._live(e):
                 continue
@@ -92,9 +106,11 @@ class Registry:
             if prev is None or (e.get("updatedAt") or 0) > \
                     (prev.get("updatedAt") or 0):
                 live[sid] = e
+        for path in set(self._last_good) - set(paths):
+            del self._last_good[path]          # file removed: forget it
         return live
 
-    def _live(self, e):
+    def _live(self, e, now=None):
         pid = e["pid"]
         if not self._alive(pid):
             self._verified = {k: v for k, v in self._verified.items()
@@ -103,16 +119,21 @@ class Registry:
         want = " ".join(str(e.get("procStart") or "").split())
         if not want:
             return True
+        now = time.time() if now is None else now
         key = (pid, want)
-        if key not in self._verified:
+        ok, checked = self._verified.get(key, (None, 0.0))
+        # re-check periodically: the process can die and its pid be reused
+        # between polls, which kill(pid, 0) alone cannot see
+        if ok is None or now - checked > REVALIDATE_S:
             got = self._lstart(pid)
             # unknown (ps failed) is trusted: a false "dead" hides a real
             # session, a false "alive" only shows a stale one
-            self._verified[key] = (not got) or got == want
-            if not self._verified[key]:
+            ok = (not got) or got == want
+            self._verified[key] = (ok, now)
+            if not ok:
                 debug("registry", f"pid {pid} reused (start {got!r} != "
                                   f"{want!r}); stale entry ignored")
-        return self._verified[key]
+        return ok
 
 
 def transcript_path(entry, roots):

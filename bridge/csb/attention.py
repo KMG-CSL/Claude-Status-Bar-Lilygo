@@ -25,13 +25,24 @@ LANES = ("needs", "limited", "review", "running", "done", "parked")
 
 DEFAULT_PARKED_AFTER_S = 4 * 3600
 
+# delegated Task ids with no live worker are trusted this long after the
+# turn ended (a worker's first transcript write can lag its launch); past
+# it, an id whose tool_result never came (interrupted, crashed worker) no
+# longer pins the session in Running
+DELEGATION_GRACE_S = 120
+
 
 def is_settled(session, r, cfg, now):
-    """Done AND nothing still working on its behalf: no delegated Task-
-    family calls in flight, no live subagents. A parent whose workers are
-    still running is not done yet — no chime, no 'ready for review'."""
-    return (r.st == "done" and not session.task_ids
-            and session.subagent_count(cfg, now) == 0)
+    """Done AND nothing still working on its behalf: no live subagents,
+    and no delegated Task-family calls still within their grace. A parent
+    whose workers are running is not done yet — no chime, no review."""
+    if r.st != "done" or session.subagent_count(cfg, now) > 0:
+        return False
+    if session.task_ids:
+        ended = session.turn_stopped_at or session.last_event_ts or 0
+        if now - ended < DELEGATION_GRACE_S:
+            return False
+    return True
 
 
 def is_unread(session, r, cfg, now):

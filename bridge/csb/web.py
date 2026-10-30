@@ -24,6 +24,7 @@ from .config import debug
 
 PAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "board.html")
 KEEPALIVE_S = 15
+WRITE_TIMEOUT_S = 10      # a tab that stops reading is dropped, not kept
 
 
 class BoardFeed:
@@ -116,13 +117,16 @@ def _stream(handler, feed):
     handler.send_header("Cache-Control", "no-store")
     handler.send_header("X-Accel-Buffering", "no")
     handler.end_headers()
+    handler.connection.settimeout(WRITE_TIMEOUT_S)
     version = -1
     try:
         while not feed.closed:
             v, data = feed.wait(version, KEEPALIVE_S)
-            if v != version and data:
-                version = v
-                handler.wfile.write(b"event: board\ndata: " + data + b"\n\n")
+            if v != version:
+                version = v       # even with no document yet: no spin
+                if data:
+                    handler.wfile.write(b"event: board\ndata: " + data
+                                        + b"\n\n")
             else:
                 handler.wfile.write(b": keepalive\n\n")
             handler.wfile.flush()
