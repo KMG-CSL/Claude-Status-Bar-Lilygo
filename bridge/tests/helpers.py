@@ -159,6 +159,10 @@ def base_cfg(**over):
     # dir does not exist, so the allocator's writes no-op (in-memory)
     cfg["slots_file"] = os.path.join(
         tempfile.gettempdir(), "csb-tests-no-slots", "slots.json")
+    # and the live session registry: a missing dir means "no registry on
+    # this machine" (fallback discovery) — tests opt in with a temp dir
+    cfg["registry_dir"] = os.path.join(
+        tempfile.gettempdir(), "csb-tests-no-registry")
     # and the fleet snapshot: missing parent dir -> the write no-ops
     cfg["fleet_file"] = os.path.join(
         tempfile.gettempdir(), "csb-tests-no-fleet", "fleet.json")

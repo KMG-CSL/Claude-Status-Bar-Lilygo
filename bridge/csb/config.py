@@ -93,6 +93,9 @@ DEFAULT_CONFIG = {
     "statusline_ttl_s": 600,         # statusline captures older than this are ignored
     "statusline_dir": "",            # "" = data_dir()/statusline
     "fleet_file": "",                # "" = data_dir()/fleet.json (csb.board reads it)
+    "registry_enabled": True,        # discover sessions from Claude Code's live registry
+    "registry_dir": "",              # "" = <claude config dir>/sessions
+    "parked_after_s": 14400,         # web board: quiet this long -> "parked" lane
     "slots_file": "",                # "" = data_dir()/slots.json (stable slot letters)
     # opt-in chime on a session's transition into wait / done: each value
     # an afplay(mac)/paplay(linux)-able sound path, "" = silent. One sound

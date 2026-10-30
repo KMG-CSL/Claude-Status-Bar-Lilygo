@@ -90,7 +90,7 @@ cd bridge
 ./.venv/bin/python -m csb.statusline install   # or: uninstall | status
 ```
 
-- **Hooks** merges 8 tagged entries (`"_tag": "claudestatusbar"`) into
+- **Hooks** merges 11 tagged entries (`"_tag": "claudestatusbar"`) into
   `~/.claude/settings.json`; each is a one-liner that POSTs the hook JSON to
   the bridge's localhost listener, backgrounded so Claude never blocks even
   with the bridge down. `uninstall` removes only our tagged entries.

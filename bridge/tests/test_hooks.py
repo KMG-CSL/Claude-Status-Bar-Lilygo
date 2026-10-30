@@ -32,7 +32,8 @@ from tests.helpers import (T0, append_jsonl, assistant_text,
                            stub_usage, tool_result, user, write_jsonl)
 
 ALL_EVENTS = ("SessionStart", "SessionEnd", "UserPromptSubmit", "Stop",
-              "SubagentStop", "PreToolUse", "PostToolUse", "Notification")
+              "StopFailure", "SubagentStart", "SubagentStop", "PreToolUse",
+              "PostToolUse", "Notification")
 
 
 # --------------------------------------------------------------- listener
@@ -81,7 +82,7 @@ class TestListener(ListenerCase):
         with open(pf2, "r", encoding="utf-8") as f:
             self.assertEqual(f.read(), str(second.port))
 
-    def test_all_eight_events_parse_via_http(self):
+    def test_all_events_parse_via_http(self):
         path = os.path.join(self.tmp.name, "s.jsonl")
         for name in ALL_EVENTS:
             extra = {}
@@ -485,7 +486,7 @@ class InstallerCase(unittest.TestCase):
 
 
 class TestInstaller(InstallerCase):
-    def test_install_registers_exactly_the_eight_events(self):
+    def test_install_registers_exactly_the_registered_events(self):
         self.assertEqual(self.install(), 0)
         cfg = json.loads(self.read())
         self.assertEqual(sorted(cfg["hooks"]), sorted(ALL_EVENTS))
@@ -501,8 +502,8 @@ class TestInstaller(InstallerCase):
             self.assertIn(self.port_file, cmd)   # port read from port file
         self.assertEqual(cfg["hooks"]["PreToolUse"][0]["matcher"],
                          "ExitPlanMode|AskUserQuestion")
-        self.assertEqual(cfg["hooks"]["Notification"][0]["matcher"],
-                         "permission_prompt")
+        # Notification is unfiltered: notification_type routes it
+        self.assertNotIn("matcher", cfg["hooks"]["Notification"][0])
         self.assertNotIn("matcher", cfg["hooks"]["Stop"][0])
 
     def _downgrade_to_gen1(self):

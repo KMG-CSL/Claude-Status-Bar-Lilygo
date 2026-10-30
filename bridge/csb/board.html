@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claude fleet</title>
+<link id="fav" rel="icon" href="data:,">
+<style>
+  :root {
+    --bg: #f6f5f2; --panel: #ffffff; --text: #1f1f1d; --dim: #77756f;
+    --line: #e4e1da; --orange: #cb6a44; --orange-bg: #fbeee8;
+    --green: #2f9e5f; --green-bg: #e9f6ee; --blue: #3b6fb6; --yellow: #b8860b;
+    --red: #c2413a; --chip: #f0eee9;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141517; --panel: #1d1f22; --text: #e8e6e1; --dim: #8d8a84;
+      --line: #2c2e32; --orange: #e0835d; --orange-bg: #33231c;
+      --green: #4cc47e; --green-bg: #18291f; --blue: #79a6e6; --yellow: #e0b54a;
+      --red: #ef6f66; --chip: #2a2c30;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter,
+               Ubuntu, sans-serif; }
+  header { display: flex; align-items: baseline; gap: 14px;
+           padding: 14px 20px 6px; }
+  header h1 { font-size: 17px; margin: 0; font-weight: 600; }
+  header .sum { color: var(--dim); }
+  header .sum b { color: var(--orange); }
+  #offline { display: none; margin: 0 20px 8px; padding: 8px 12px;
+             border-radius: 8px; background: var(--chip); color: var(--dim); }
+  body.off #offline { display: block; }
+  body.off main { opacity: .45; }
+  main { padding: 4px 20px 30px; }
+  .lane { margin: 10px 0 4px; }
+  .lane > h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
+               color: var(--dim); margin: 0 0 6px; font-weight: 600;
+               cursor: pointer; user-select: none; }
+  .lane > h2 .n { font-weight: 400; margin-left: 4px; }
+  .lane.empty > h2 { opacity: .5; }
+  .lane.collapsed .cards { display: none; }
+  .lane.collapsed > h2::after { content: " ▸"; }
+  .lane[data-lane="needs"] > h2 { color: var(--orange); }
+  .cards { display: grid; gap: 10px;
+           grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); }
+  .card { background: var(--panel); border: 1px solid var(--line);
+          border-radius: 10px; padding: 10px 12px; min-width: 0; }
+  .card.needs { border-color: var(--orange); background: var(--orange-bg);
+                animation: breathe 2.2s ease-in-out infinite; }
+  .card.needs.long { animation-duration: 1.2s; }
+  .card.review { border-left: 4px solid var(--green); }
+  .card.parked, .card.done { opacity: .82; }
+  @keyframes breathe {
+    0%, 100% { box-shadow: 0 0 0 0 transparent; }
+    50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--orange) 35%, transparent); }
+  }
+  @media (prefers-reduced-motion: reduce) { .card.needs { animation: none; } }
+  .top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .slot { flex: none; width: 22px; height: 22px; border-radius: 6px;
+          display: grid; place-items: center; font-weight: 700; font-size: 12px;
+          background: var(--chip); color: var(--dim); }
+  .needs .slot { background: var(--orange); color: #fff; }
+  .review .slot { background: var(--green); color: #fff; }
+  .title { font-weight: 600; white-space: nowrap; overflow: hidden;
+           text-overflow: ellipsis; }
+  .meta { margin-left: auto; flex: none; color: var(--dim); font-size: 12px; }
+  .state { margin: 6px 0 2px; font-weight: 600; font-size: 13px; }
+  .state.needs { color: var(--orange); }
+  .state.limited { color: var(--yellow); }
+  .state.review { color: var(--green); }
+  .state.running { color: var(--blue); }
+  .state.done, .state.parked { color: var(--dim); }
+  .row { margin-top: 5px; font-size: 13px; color: var(--text);
+         display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden;
+         -webkit-line-clamp: 2; overflow-wrap: anywhere; }
+  .row.reply { -webkit-line-clamp: 4; }
+  .card.open .row { -webkit-line-clamp: unset; }
+  .row .who { color: var(--dim); font-weight: 600; margin-right: 4px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
+  .chip { background: var(--chip); color: var(--dim); border-radius: 999px;
+          padding: 1px 8px; font-size: 12px; white-space: nowrap;
+          max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+  .chip.peer-in::before { content: "← "; }
+  .chip.peer-out::before { content: "→ "; }
+  .foot { display: flex; gap: 10px; margin-top: 8px; color: var(--dim);
+          font-size: 12px; align-items: center; }
+  .foot button { margin-left: auto; font: inherit; color: var(--text);
+                 background: var(--chip); border: 1px solid var(--line);
+                 border-radius: 6px; padding: 2px 9px; cursor: pointer; }
+  .unread-dot { width: 7px; height: 7px; border-radius: 50%;
+                background: var(--green); flex: none; }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="h">Claude fleet</h1>
+  <span class="sum" id="sum"></span>
+</header>
+<div id="offline">Bridge offline: reconnecting. Showing the last known state.</div>
+<main id="main"></main>
+
+<script>
+"use strict";
+// Lane order and labels; done/parked start collapsed (remembered per tab).
+const LANES = [
+  ["needs", "Needs you"], ["limited", "Rate-limited"],
+  ["review", "Ready for review"], ["running", "Running"],
+  ["done", "Done, seen"], ["parked", "Parked"],
+];
+const COLLAPSED = new Set(JSON.parse(
+  localStorage.getItem("csb-collapsed") || '["done","parked"]'));
+const NEED = { permission: "Needs approval", plan: "Plan to approve",
+               question: "Asked you a question", error: "Error" };
+
+let doc = null, skew = 0, lastMsg = 0;
+
+function ago(ts) {
+  if (!ts) return "";
+  const s = Math.max(0, Date.now() / 1000 - skew - ts);
+  return dur(s) + " ago";
+}
+function dur(s) {
+  s = Math.max(0, Math.floor(s));
+  if (s < 60) return s + "s";
+  if (s < 3600) return Math.floor(s / 60) + "m";
+  if (s < 86400) return Math.floor(s / 3600) + "h" +
+    String(Math.floor(s % 3600 / 60)).padStart(2, "0");
+  return Math.floor(s / 86400) + "d";
+}
+// element helper: text only, never HTML (transcript text is untrusted)
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  return e;
+}
+// seconds since the doc was built, so timers tick between events
+function live() { return Math.max(0, Date.now() / 1000 - skew - doc.ts); }
+
+function stateLine(c) {
+  const t = c.el + live();
+  switch (c.lane) {
+    case "needs":
+      return (NEED[c.need] || "Needs you") +
+        (c.tool && c.need !== "question" ? ": " + c.tool : "") +
+        (c.detail ? " · " + c.detail : "") + " · waiting " + dur(t);
+    case "limited": return "Rate-limited" +
+        (c.lim ? " · resets in " + dur(c.lim - Date.now() / 1000 + skew) : "");
+    case "review": return "Finished " + ago(c.reply_ts || c.activity) +
+        (c.fin === "fail" ? " · failed" : "") + " · not read yet";
+    case "running":
+      if (c.st === "done") return "Delegating · " +
+        (c.sa || c.delegating) + " agent" + ((c.sa || c.delegating) === 1 ? "" : "s");
+      return (c.tool ? c.tool + (c.detail ? " · " + c.detail : "") : "Working") +
+        " · " + dur(t);
+    case "parked": return "Parked · quiet " + ago(c.activity).replace(" ago", "") +
+        (c.unread ? " · unread" : "");
+    default: return "Done " + ago(c.activity) +
+        (c.fin && c.fin !== "ok" ? " · " + c.fin : "");
+  }
+}
+
+function card(c) {
+  const d = el("div", "card " + c.lane +
+    (c.lane === "needs" && c.el + live() > 300 ? " long" : ""));
+  d.dataset.sid = c.sid;
+  const top = el("div", "top");
+  top.append(el("span", "slot",
+    c.slot == null ? "·" : String.fromCharCode(65 + c.slot)));
+  if (c.unread && c.lane !== "review") top.append(el("span", "unread-dot"));
+  top.append(el("span", "title", c.title || c.project || c.sid.slice(0, 8)));
+  const meta = [c.project, c.model, c.ctx ? c.ctx + "%" : ""]
+    .filter(Boolean).join(" · ");
+  top.append(el("span", "meta", meta));
+  d.append(top);
+  d.append(el("div", "state " + c.lane, stateLine(c)));
+  if (c.task) d.append(row("Task", c.task));
+  if (c.prompt) d.append(row("You", c.prompt));
+  if (c.reply) d.append(row("Claude", tail(c.reply), "reply"));
+  const chips = el("div", "chips");
+  for (const s of c.subagents) chips.append(el("span", "chip",
+    s.type + " · " + dur(s.age + live())));
+  if (!c.subagents.length && c.sa) chips.append(el("span", "chip",
+    c.sa + " subagent" + (c.sa === 1 ? "" : "s")));
+  if (c.delegating && c.st !== "done") chips.append(el("span", "chip",
+    c.delegating + " delegated"));
+  for (const p of c.peers.slice(0, 4)) {
+    const ch = el("span", "chip peer-" + p.dir, p.name + " " + ago(p.ts));
+    ch.title = p.gist || "";
+    chips.append(ch);
+  }
+  if (c.pm) chips.append(el("span", "chip", c.pm));
+  if (c.kind && c.kind !== "interactive") chips.append(el("span", "chip", c.kind));
+  if (chips.childElementCount) d.append(chips);
+  const foot = el("div", "foot");
+  foot.append(el("span", "", c.started ? "started " + ago(c.started) : ""));
+  if (doc.focus && c.pid) {
+    const b = el("button", "", "Jump");
+    b.title = "Bring this session's terminal to the front";
+    b.onclick = (ev) => { ev.stopPropagation(); jump(c.sid); };
+    foot.append(b);
+  }
+  d.append(foot);
+  d.onclick = () => d.classList.toggle("open");
+  return d;
+}
+function row(who, text, cls) {
+  const r = el("div", "row" + (cls ? " " + cls : ""));
+  r.append(el("span", "who", who), document.createTextNode(text));
+  return r;
+}
+// the END of the reply is where Claude left off
+function tail(t) {
+  t = t.trim();
+  return t.length > 600 ? "…" + t.slice(-600) : t;
+}
+
+function render() {
+  if (!doc) return;
+  const open = new Set([...document.querySelectorAll(".card.open")]
+    .map(n => n.dataset.sid));
+  const main = document.getElementById("main");
+  main.replaceChildren();
+  for (const [key, label] of LANES) {
+    const cards = doc.lanes[key] || [];
+    const lane = el("section", "lane" + (cards.length ? "" : " empty") +
+      (COLLAPSED.has(key) ? " collapsed" : ""));
+    lane.dataset.lane = key;
+    const h = el("h2", "", label);
+    h.append(el("span", "n", String(cards.length)));
+    h.onclick = () => {
+      COLLAPSED.has(key) ? COLLAPSED.delete(key) : COLLAPSED.add(key);
+      localStorage.setItem("csb-collapsed", JSON.stringify([...COLLAPSED]));
+      render();
+    };
+    lane.append(h);
+    const box = el("div", "cards");
+    for (const c of cards) {
+      const n = card(c);
+      if (open.has(c.sid)) n.classList.add("open");
+      box.append(n);
+    }
+    lane.append(box);
+    main.append(lane);
+  }
+  const k = doc.counts;
+  const needs = k.needs || 0;
+  const sum = document.getElementById("sum");
+  sum.replaceChildren();
+  if (needs) sum.append(el("b", "", needs + " need" + (needs === 1 ? "s" : "") + " you"));
+  else sum.append("nothing needs you");
+  sum.append(` · ${k.review || 0} to review · ${k.running || 0} running`);
+  document.getElementById("h").textContent = "Claude fleet · " + doc.host;
+  document.title = (needs ? `(${needs}) ` : k.review ? "• " : "") +
+    "Claude fleet · " + doc.host;
+  favicon(needs ? "#cb6a44" : k.review ? "#2f9e5f" : "#9a978f");
+}
+
+let favColor = "";
+function favicon(color) {
+  if (color === favColor) return;
+  favColor = color;
+  const c = document.createElement("canvas");
+  c.width = c.height = 32;
+  const g = c.getContext("2d");
+  g.fillStyle = color;
+  g.beginPath(); g.arc(16, 16, 12, 0, 7); g.fill();
+  document.getElementById("fav").href = c.toDataURL();
+}
+
+function jump(sid) {
+  fetch("/api/focus", { method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sid }) }).catch(() => {});
+}
+
+function accept(d) {
+  doc = d;
+  skew = Date.now() / 1000 - d.ts;
+  lastMsg = Date.now();
+  document.body.classList.remove("off");
+  render();
+}
+
+const es = new EventSource("/api/events");
+es.addEventListener("board", (e) => accept(JSON.parse(e.data)));
+fetch("/api/board").then(r => r.json()).then(d => { if (d.lanes) accept(d); })
+  .catch(() => {});
+// the bridge steps at ~1 Hz: no event for 6s means it is gone
+setInterval(() => {
+  if (Date.now() - lastMsg > 6000) document.body.classList.add("off");
+  else if (doc) render();     // tick timers between events
+}, 1000);
+</script>
+</body>
+</html>

@@ -23,7 +23,8 @@ from .limits import is_expired
 #      the frozen turn duration, idle is 0 — all computed at read time)
 # lim: unix epoch the rate limit lifts (0 when not limited)
 # err: short API-error reason ("" when none)
-# src: evidence tier that decided st — "h" hook / "t" transcript / "m" mtime
+# src: evidence tier that decided st — "h" hook / "r" registry /
+#      "t" transcript / "m" mtime
 # fin: terminal outcome ok/fail/cancel, "" unless st=done
 StateResult = namedtuple("StateResult", "st tl td el lim err src fin",
                          defaults=(0, "", "t", ""))
@@ -58,7 +59,36 @@ def derive(session, cfg, now=None):
 
     st, tool, detail, src = _state(session, cfg, now, hooky)
     r = _apply_sticky_done(session, st, tool, detail, src, now, hooky)
+    r = _apply_registry(session, r, cfg, now, hooky)
     return _apply_delegating(session, r, cfg, now)
+
+
+def _apply_registry(session, r, cfg, now, hooky):
+    """Registry tier (src "r"): Claude Code's own live status, for
+    sessions without fresh hook edges. Coarse but exact where the
+    transcript tiers guess: "busy" means a turn is running whatever the
+    transcript's quiet says (long thinking, a slow tool), and a non-null
+    waitingFor means a dialog is up. "idle" is NOT used to force done:
+    an idle process may still be showing a permission prompt the
+    transcript tier detects better. Hook-fresh sessions skip this tier —
+    edges are finer-grained (§b precedence: hooks > registry > transcript)."""
+    reg = session.reg
+    if not reg or hooky:
+        return r
+    changed = (reg.get("statusUpdatedAt") or 0) / 1000.0
+    waiting = reg.get("waitingFor") or reg.get("status") == "waiting"
+    if waiting and r.st != "wait":
+        td = waiting if isinstance(waiting, str) else ""
+        return StateResult("wait", "", td[:32],
+                           max(0, int(now - changed)) if changed else 0,
+                           0, "", "r")
+    if reg.get("status") == "busy" and r.st in ("done", "idle"):
+        session.done_latch = None          # the turn is demonstrably live
+        session.fin = ""
+        start = session.turn_start or changed or now
+        return StateResult("run", "", "", max(0, int(now - start)),
+                           0, "", "r")
+    return r
 
 
 def _apply_delegating(session, r, cfg, now):

@@ -35,6 +35,27 @@ NOISE_TYPES = frozenset((
 ))
 
 
+# Notification types (hook payload notification_type) that put a dialog in
+# front of the user, and the ones that close one. Everything else
+# (idle_prompt nag, auth_success, agent_completed, quota_*, plugin) is
+# ignored — none of them is something the user must answer.
+NOTIFY_WAIT = frozenset(("permission_prompt", "elicitation_dialog",
+                         "elicitation_url_dialog", "agent_needs_input"))
+NOTIFY_CLEAR = frozenset(("elicitation_complete", "elicitation_response"))
+
+# hook-tracked subagents are dropped after this long without a
+# SubagentStop (a missed edge must not pin "running" forever)
+SUBAGENT_HOOK_TTL_S = 3 * 3600
+
+# card text caps (board view); the wire packet has its own, smaller ones
+PROMPT_MAX = 600
+REPLY_MAX = 1200
+
+
+def _one_line(text, cap):
+    return " ".join((text or "").split())[:cap]
+
+
 def _result_text(block):
     """Text of a tool_result block; content is a str or a block list."""
     c = block.get("content")
@@ -59,6 +80,7 @@ class Session:
         self.claude_pid = 0           # exact PID from hook ppid (0 = unknown)
         self.entrypoint = ""          # "cli" interactive, "sdk-cli" = claude -p
         self.ai_title = ""            # Claude Code's generated session title
+        self.agent_name = ""          # /rename name ("agent-name" record)
         self.custom_title = ""        # user-set title (wins over ai_title)
         self.model = ""
         self._sa_count = 0            # active subagent transcripts
@@ -71,6 +93,14 @@ class Session:
         self.last_event_ts = None
         self.last_role = ""           # user / assistant
         self.last_assistant_text = ""
+        # board-card facts (cheap: all parsed from records we already read)
+        self.last_prompt = ""         # newest HUMAN prompt text (origin.kind)
+        self.last_prompt_ts = None    # ...and when: "seen" for unread
+        self.last_reply_ts = None     # newest assistant text record
+        self.current_task = ""        # TodoWrite in_progress item
+        self.peers = deque(maxlen=8)  # (dir "in"|"out", name, ts, gist)
+        self.subagents = {}           # agent_id -> (agent_type, start ts)
+        self.reg = None               # live registry entry (csb.registry)
         self.pending_tool = ""        # tool name awaiting result
         self.pending_tool_ts = None
         self.pending_ids = {}         # tool_use id -> (name, ts)
@@ -153,6 +183,12 @@ class Session:
                 self.ai_title = t.strip()
             return
 
+        if rtype == "agent-name":
+            t = rec.get("agentName") or ""
+            if t:
+                self.agent_name = str(t).strip()
+            return
+
         if rtype == "custom-title":
             t = rec.get("customTitle") or rec.get("title") or ""
             if t:
@@ -218,6 +254,20 @@ class Session:
                                                    float(reset))
                     elif b.get("type") == "text":
                         text += b.get("text", "")
+            origin = rec.get("origin")
+            kind = origin.get("kind") if isinstance(origin, dict) else None
+            if not has_tool_result and kind == "peer":
+                self.peers.append(("in", str(origin.get("name") or "?"), ts,
+                                   _one_line(origin.get("body"), 160)))
+            # a HUMAN prompt is what "seen" means (the user replied to the
+            # session). Peer messages, task notifications and other
+            # injected turns start work but are not the user looking.
+            # Older Claude Code writes no origin: non-meta counts as human.
+            human = kind == "human" or (kind is None
+                                        and not rec.get("isMeta"))
+            if not has_tool_result and human and text.strip():
+                self.last_prompt = _one_line(text, PROMPT_MAX)
+                self.last_prompt_ts = ts
             if not has_tool_result:
                 self.turn_start = ts
                 self.error = ""       # a real prompt is the user acting on it
@@ -273,13 +323,33 @@ class Session:
                 if b.get("type") == "tool_use":
                     self.pending_ids[b.get("id", "")] = (
                         b.get("name", "Tool"), ts, tool_detail(b.get("input")))
+                    self._note_tool(b.get("name"), b.get("input"), ts)
                 elif b.get("type") == "text":
                     text += b.get("text", "")
             if text:
-                self.last_assistant_text = text[-400:]
+                self.last_assistant_text = text[-REPLY_MAX:]
+                self.last_reply_ts = ts
             self._turn_tail.append((False, ts))
             self.last_role = "assistant"
             self.last_event_ts = ts
+
+    def _note_tool(self, name, inp, ts):
+        """Card facts carried by tool calls: who this session messages
+        (SendMessage) and what it is working on (TodoWrite)."""
+        if not isinstance(inp, dict):
+            return
+        if name == "SendMessage":
+            self.peers.append(("out", str(inp.get("to") or "?")[:60], ts,
+                               _one_line(inp.get("summary")
+                                         or inp.get("message"), 160)))
+        elif name == "TodoWrite":
+            todos = inp.get("todos")
+            if isinstance(todos, list):
+                cur = [t for t in todos if isinstance(t, dict)
+                       and t.get("status") == "in_progress"]
+                t = cur[0] if cur else {}
+                self.current_task = _one_line(
+                    t.get("activeForm") or t.get("content"), 120)
 
     # ---- hook edges (Item 1) ----
     def apply_hook(self, ev):
@@ -309,8 +379,12 @@ class Session:
             self.done_latch = None    # a genuine new prompt releases sticky-done
             self.fin = ""             # new turn: last outcome is history
             self._turn_tail.clear()
-        elif name == "Stop":
+        elif name in ("Stop", "StopFailure"):
             self.turn_stopped_at = ts
+            reply = ev.get("last_assistant_message")
+            if isinstance(reply, str) and reply.strip():
+                self.last_assistant_text = reply[-REPLY_MAX:]
+                self.last_reply_ts = ts
             self.perm_prompt_at = None
             # unresolved Task-family tool_use at Stop is delegation, not a
             # cancelled turn: background workers outlive the orchestrator's
@@ -325,6 +399,17 @@ class Session:
             # a still-unmatched tool_use means the turn was cancelled
             # (Escape), an API error in the turn window means it failed
             self.fin = self._classify_fin(cancel=bool(self.pending_ids))
+            if name == "StopFailure":
+                # the turn died on an API error: it is over (not "working
+                # forever") and it failed. A rate limit with a known reset
+                # (the transcript banner's limit_reset) shows as limited;
+                # anything else surfaces as an error wait until the next
+                # real prompt or successful API call clears it.
+                self.fin = "fail"
+                etype = str(ev.get("error_type") or ev.get("error")
+                            or "unknown")
+                if not self.limit_reset:
+                    self.error = limits.short_reason(etype) or etype[:24]
             # the turn is over: still-unmatched tool_use ids were abandoned
             # (Escape) and must not read as pending approval (fragile #5)
             self.pending_ids.clear()
@@ -333,6 +418,12 @@ class Session:
             # here so a user-widened matcher can't arm the latch spuriously
             if ev.get("tool_name") in ("ExitPlanMode", "AskUserQuestion"):
                 self.perm_prompt_at = ts
+        elif name == "Notification" and ev.get("notification_type"):
+            ntype = ev["notification_type"]
+            if ntype in NOTIFY_WAIT:
+                self.perm_prompt_at = ts
+            elif ntype in NOTIFY_CLEAR:
+                self.perm_prompt_at = None
         elif name == "Notification":
             # The hook is installed with matcher "permission_prompt", but
             # matcher filtering is only documented for tool events — if
@@ -347,7 +438,14 @@ class Session:
                 self.perm_prompt_at = ts
         elif name == "PostToolUse":
             self.perm_prompt_at = None   # the prompted tool ran -> approved
+        elif name == "SubagentStart":
+            aid = ev.get("agent_id")
+            if aid:
+                self.subagents[str(aid)] = (str(ev.get("agent_type") or ""),
+                                            ts)
+            self._sa_checked = 0
         elif name == "SubagentStop":
+            self.subagents.pop(str(ev.get("agent_id") or ""), None)
             self._sa_checked = 0      # force a subagent re-count next read
         elif name == "SessionStart":
             # happy's stale-state reset: clear wait/sticky state inherited
@@ -357,6 +455,7 @@ class Session:
             self.done_latch = None
             self.pending_ids.clear()
             self.task_ids.clear()
+            self.subagents.clear()
             self.turn_started_at = None
             self.turn_stopped_at = None
             self.fin = ""
@@ -372,6 +471,7 @@ class Session:
             self.perm_prompt_at = None
             self.pending_ids.clear()  # nothing left to approve
             self.task_ids.clear()     # the claude process (and its workers) exited
+            self.subagents.clear()
 
     def _classify_fin(self, cancel=False):
         """Terminal outcome of the turn ending now (Item 4): an API error
@@ -416,8 +516,25 @@ class Session:
                     if now - safe_mtime(os.path.join(dirpath, fn)) < \
                             cfg.get("subagent_live_s", 15):
                         n += 1
+        # hook-tracked live subagents (SubagentStart without Stop yet) are
+        # exact where file mtimes lag; take whichever sees more
+        for aid, (_t, t0) in list(self.subagents.items()):
+            if now - t0 > SUBAGENT_HOOK_TTL_S:
+                del self.subagents[aid]
+        n = max(n, len(self.subagents))
         self._sa_count = n
         return n
+
+    def title(self):
+        """Display name: the user's /rename name (live registry first —
+        it follows renames instantly — then the transcript record), then
+        a custom title, Claude Code's generated title, the first prompt."""
+        reg_name = ""
+        if self.reg and self.reg.get("nameSource") == "user":
+            reg_name = str(self.reg.get("name") or "")
+        return (reg_name or self.agent_name or self.custom_title
+                or self.ai_title or self.name
+                or os.path.basename(os.path.dirname(self.path))[:24])
 
     def to_packet(self, cfg, now=None, state=None):
         """Wire dict for ses[]. `state` takes a precomputed StateResult so
@@ -441,8 +558,7 @@ class Session:
             if self.ctx_tokens > limit:
                 limit = 1000000
             ctx = int(round(100.0 * self.ctx_tokens / limit))
-        title = (self.custom_title or self.ai_title or self.name
-                 or os.path.basename(os.path.dirname(self.path))[:24])
+        title = self.title()
         return {
             "pj": self.project[:20],
             "nm": title[:56],

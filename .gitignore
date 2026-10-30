@@ -25,3 +25,5 @@ logos/*
 !logos/starter-pack
 bridge/slots.json
 bridge/hook-port
+bridge/fleet.json
+bridge/statusline/

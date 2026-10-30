@@ -19,7 +19,9 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
+from . import web
 from .config import CLAUDE_DIR, data_dir, debug, load_config, log
+from .web import BoardFeed
 
 # Marker name inside every installed hook command: install/uninstall stay
 # idempotent string-contains checks (ClaudeBar / ccstatusline pattern),
@@ -35,6 +37,8 @@ TAG = "claudestatusbar"
 # matters. Bump this whenever hook_command() changes meaningfully.
 #   gen 1 - original: no ppid, KVM focus fell back to cwd guessing
 #   gen 2 - adds ?ppid=$PPID: exact session<->PID binding (kvm-design.md)
+# The event SET is checked separately (status reports missing events), so
+# growing HOOK_MATCHERS needs no bump - an older install just lacks them.
 HOOK_GEN = 2
 GEN_TOKEN = "csb-gen="
 
@@ -43,25 +47,31 @@ GEN_TOKEN = "csb-gen="
 # #172 self-probe guard). Unused until a probe exists.
 SELF_PROBE_CWD_SUFFIX = "csb-self-probe"
 
-# Exactly these 8 official events — no unofficial names (TaskCompleted /
-# SubagentStart are NOT registered). PreToolUse/Notification matchers give
-# instant waiting states (claude-notifications-go).
+# Official events only (checked against the settings.json hook schema).
+# PreToolUse's matcher and Notification's notification_type give instant
+# waiting states (claude-notifications-go).
 HOOK_MATCHERS = (
     ("SessionStart", None),
     ("SessionEnd", None),
     ("UserPromptSubmit", None),
     ("Stop", None),
+    ("StopFailure", None),
+    ("SubagentStart", None),
     ("SubagentStop", None),
     ("PreToolUse", "ExitPlanMode|AskUserQuestion"),
     ("PostToolUse", None),
-    ("Notification", "permission_prompt"),
+    ("Notification", None),
 )
 
-# "message" is kept so the session layer can tell a permission prompt
-# from the ~60s idle nag if Claude Code ever delivers Notification events
-# that the installed "permission_prompt" matcher did not filter.
+# notification_type routes Notification (Session.apply_hook); "message"
+# stays as the fallback for payloads without it (older Claude Code).
+# agent_id/agent_type track subagents; error/error_type classify
+# StopFailure; last_assistant_message (Stop/SubagentStop) is the reply
+# text without waiting for the transcript tail.
 PAYLOAD_FIELDS = ("session_id", "transcript_path", "cwd",
-                  "hook_event_name", "tool_name", "message")
+                  "hook_event_name", "tool_name", "message",
+                  "notification_type", "agent_id", "agent_type",
+                  "error", "error_type", "last_assistant_message")
 
 
 def default_port_file(cfg=None):
@@ -81,6 +91,7 @@ class HookListener:
     def __init__(self, cfg=None):
         cfg = cfg or {}
         self.queue = queue.Queue()
+        self.feed = BoardFeed()       # web board (csb.web), same listener
         handler = self._handler_class()
         preferred = int(cfg.get("hook_port", 45732) or 0)
         try:
@@ -113,9 +124,17 @@ class HookListener:
 
     def _handler_class(self):
         q = self.queue
+        feed = self.feed
 
         class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                if not web.handle_get(self, feed):
+                    self.send_response(404)
+                    self.end_headers()
+
             def do_POST(self):
+                if web.handle_post(self, q.put):
+                    return
                 payload = None
                 try:
                     n = int(self.headers.get("Content-Length") or 0)
@@ -154,6 +173,7 @@ class HookListener:
         os.replace(tmp, self.port_file)
 
     def close(self):
+        self.feed.close()             # releases SSE handler threads
         self.server.shutdown()
         self.server.server_close()
         self.thread.join(timeout=2)
@@ -250,7 +270,7 @@ def _strip_ours(settings):
 
 
 def install(settings_path, port_file=None):
-    """Merge our 8 tagged hook entries into settings.json (idempotent:
+    """Merge our tagged hook entries into settings.json (idempotent:
     remove-tagged-then-add). Opt-in CLI only — never called at runtime."""
     if sys.platform == "win32":
         log("hooks", "install refused: the hook command is POSIX-only; "
@@ -384,6 +404,13 @@ def status(settings_path, port_file=None):
     if events:
         print(f"installed ({len(events)} events) in {settings_path}: "
               + ", ".join(events))
+        missing = sorted({e for e, _m in HOOK_MATCHERS} - set(events))
+        if missing:
+            # e.g. StopFailure: without it a turn that dies on an API
+            # error never ends and the tile reads "working" forever
+            print(f"  MISSING: {', '.join(missing)} — re-run `install` to "
+                  "add them (installs predating them still work, with "
+                  "less exact state)")
         stale = [g for g in installed_generations(settings_path)
                  if g < HOOK_GEN]
         if stale:

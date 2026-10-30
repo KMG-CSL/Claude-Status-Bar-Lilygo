@@ -288,6 +288,18 @@ def focus_slot(core, sl, runner=_run):
     if ses is None or not ses.cwd:
         log("focus", f"slot {sl}: no session/cwd resolved")
         return False
+    return focus_session(core, ses, runner=runner)
+
+
+def focus_session(core, ses, runner=_run):
+    """Focus one Session's terminal (display slot or web board). Logs
+    outcome; False when nothing could be raised."""
+    if not enabled(core.cfg):
+        announce(core.cfg)
+        return False
+    if not ses.cwd:
+        log("focus", f"{ses.session_id[:8]}: no cwd resolved")
+        return False
     t0 = time.time()
     pids = []
     if ses.claude_pid:

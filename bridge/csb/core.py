@@ -7,12 +7,13 @@ import os
 import queue
 import time
 
-from . import statusline
+from . import attention, statusline
 from .chime import Chimer
 from .config import data_dir, log
 from .engine import LONG_TOOLS, derive
 from .fmt import fmt_countdown
 from .limits import AlertLog, is_expired
+from .registry import Registry, transcript_path
 from .session import Session, find_transcripts
 from .slots import SlotAllocator
 from .usage import UsageTracker
@@ -21,7 +22,14 @@ RESCAN_INTERVAL_S = 15
 DISCOVERY_WINDOW_S = 7 * 86400   # ignore transcripts older than a week
 
 
-def build_packet(sessions, cfg, usage, now=None, slots=None, chimer=None):
+def build_packet(sessions, cfg, usage, now=None, slots=None, chimer=None,
+                 registry_mode=False, board=None):
+    """-> the serial status packet. registry_mode: the live set is exactly
+    the sessions the Claude Code registry reports alive (Session.reg),
+    however long they have been quiet — parked, not hidden. `board`, if
+    given, is called with (live, states, entries) for the WHOLE live set
+    before the display's max_sessions curation (the web board shows
+    everything)."""
     if now is None:
         now = time.time()
     if slots is None:
@@ -32,10 +40,15 @@ def build_packet(sessions, cfg, usage, now=None, slots=None, chimer=None):
     # (UserPromptSubmit before the transcript file exists) must be visible
     # during its first turn (§c)
     ignore_ep = set(cfg.get("ignore_entrypoints", ()))
-    live = [s for s in sessions.values()
-            if now - max(s.mtime(), s.hook_last) < cfg["active_window_min"] * 60
-            and (s.model or s.turn_start or s.turn_started_at)
-            and s.entrypoint not in ignore_ep]
+    if registry_mode:
+        live = [s for s in sessions.values()
+                if s.reg is not None and s.entrypoint not in ignore_ep]
+    else:
+        live = [s for s in sessions.values()
+                if now - max(s.mtime(), s.hook_last)
+                < cfg["active_window_min"] * 60
+                and (s.model or s.turn_start or s.turn_started_at)
+                and s.entrypoint not in ignore_ep]
     live.sort(key=lambda s: s.first_seen)
     for s in live:
         try:                       # statusline captures feed derive + packet
@@ -45,9 +58,12 @@ def build_packet(sessions, cfg, usage, now=None, slots=None, chimer=None):
     states = [derive(s, cfg, now) for s in live]   # one derive per session
     if chimer is not None:
         # transitions are judged on the full qualifying set, pre-curation:
-        # a collapsed done session finishing must not re-chime on reappear
-        chimer.observe({s.session_id: r.st for s, r in zip(live, states)},
-                       now=now)
+        # a collapsed done session finishing must not re-chime on reappear.
+        # chime_state is the stingy view: a parent still delegating reads
+        # as working, so it chimes once, when its last worker finishes.
+        chimer.observe({s.session_id: attention.chime_state(s, r, cfg, now)
+                        for s, r in zip(live, states)}, now=now)
+    full_live, full_states = live, states
     live, states, hid = _curate(live, states, cfg["max_sessions"])
     act = 0
     if live:
@@ -69,7 +85,22 @@ def build_packet(sessions, cfg, usage, now=None, slots=None, chimer=None):
     for s, r in zip(live, states):
         e = s.to_packet(cfg, now=now, state=r)
         e["sl"] = slot_map[s.session_id]
+        # additive: finished and not yet seen (attention.is_unread) — the
+        # firmware draws unread-done distinctly from seen-done
+        e["ur"] = int(attention.is_unread(s, r, cfg, now))
         ses.append(e)
+    if board is not None:
+        # every live session, curated-out ones included (slot None: not
+        # on the display right now)
+        shown = {s.session_id: e for s, e in zip(live, ses)}
+        entries = []
+        for s, r in zip(full_live, full_states):
+            e = shown.get(s.session_id)
+            if e is None:
+                e = s.to_packet(cfg, now=now, state=r)
+                e["sl"] = None
+            entries.append(e)
+        board(full_live, full_states, entries)
     return {
         "t": "s",
         "ses": ses,
@@ -103,7 +134,7 @@ def _curate(live, states, max_sessions):
 
 class BridgeCore:
     def __init__(self, cfg, usage=None, session_factory=Session,
-                 hook_queue=None):
+                 hook_queue=None, registry=None):
         self.cfg = cfg
         self.usage = usage if usage is not None else UsageTracker(cfg)
         self.sessions = {}          # transcript path -> Session
@@ -117,6 +148,13 @@ class BridgeCore:
             cfg.get("slots_file") or os.path.join(data_dir(), "slots.json"),
             max(8, cfg.get("max_sessions", 8)))
         self.chimer = Chimer(cfg)
+        # Claude Code's live session registry: exact discovery when the
+        # machine has one (registry_mode), transcript walking otherwise
+        if registry is None and cfg.get("registry_enabled", True):
+            registry = Registry(cfg)
+        self.registry = registry
+        self.registry_mode = False
+        self.board_doc = None       # newest web-board document
         from . import focus          # local: keeps subprocess/AppleScript
         focus.announce(cfg)          # off the import path of every consumer
 
@@ -157,17 +195,28 @@ class BridgeCore:
             now = time.time()
         self._last_rescan = now
         cutoff = now - DISCOVERY_WINDOW_S
-        for path, mtime in find_transcripts(
-                self.cfg["roots"],
-                self.cfg.get("ignore_projects", ())).items():
+        # registry mode: discovery is exact (_refresh_registry); the
+        # directory walk only runs on machines without a registry
+        found = {} if self.registry_mode else find_transcripts(
+            self.cfg["roots"], self.cfg.get("ignore_projects", ()))
+        for path, mtime in found.items():
             if mtime > cutoff and path not in self.sessions:
                 self.sessions[path] = self._session_factory(path)
         fresh_cut = now - self.cfg.get("hook_fresh_s", 900)
         for path in list(self.sessions):
+            s = self.sessions[path]
+            if s.reg is not None:
+                continue          # live per the registry, file or not yet
+            if self.registry_mode and s.hook_last < now - 60:
+                # no longer a live session (process exited, or /clear moved
+                # it to a new transcript): release it. The 60s grace keeps
+                # an eagerly hook-created session until the registry
+                # catches up with a fresh sessionId.
+                del self.sessions[path]
+                continue
             # keep hook-fresh sessions whose transcript file does not exist
             # yet (eager creation §c: the file may lag the first edges)
-            if not os.path.exists(path) \
-                    and self.sessions[path].hook_last < fresh_cut:
+            if not os.path.exists(path) and s.hook_last < fresh_cut:
                 del self.sessions[path]
 
     def step(self, now=None):
@@ -179,6 +228,7 @@ class BridgeCore:
         routed = self._drain_hooks(now)
         if self.hooks is not None:
             self.hooks.assert_port_file()
+        self._refresh_registry()
         if now - self._last_rescan > RESCAN_INTERVAL_S:
             self.rescan(now)
         new_usage = []
@@ -192,10 +242,50 @@ class BridgeCore:
             session.apply_hook(ev)
         self.usage.add_events(new_usage)
         self._limit_alerts(now)
-        pkt = build_packet(self.sessions, self.cfg, self.usage, now=now,
-                           slots=self.slots, chimer=self.chimer)
+        pkt = build_packet(
+            self.sessions, self.cfg, self.usage, now=now, slots=self.slots,
+            chimer=self.chimer, registry_mode=self.registry_mode,
+            board=lambda *a: self._publish_board(*a, now=now))
         self._write_fleet(pkt, now)
         return pkt
+
+    def _refresh_registry(self):
+        """Bind every live registry entry to its CURRENT transcript's
+        Session (sessionId changes on /clear, so a pid's transcript moves)
+        and unbind the rest. No registry on this machine -> fallback mode,
+        transcript discovery as before."""
+        live = self.registry.read() if self.registry is not None else None
+        self.registry_mode = live is not None
+        if live is None:
+            return
+        bound = set()
+        for sid, e in live.items():
+            path = self._sid_map.get(sid) or \
+                transcript_path(e, self.cfg["roots"])
+            s = self.sessions.get(path)
+            if s is None:
+                s = self.sessions[path] = self._session_factory(path)
+            s.reg = e
+            if isinstance(e.get("pid"), int):
+                s.claude_pid = e["pid"]          # exact, no hook needed
+            cwd = e.get("cwd")
+            if cwd and not s.cwd:         # launch dir, before any record
+                s.cwd = cwd
+                s.project = s.project or \
+                    os.path.basename(cwd.rstrip("/\\")) or cwd
+            self._sid_map[sid] = path
+            bound.add(path)
+        for path, s in self.sessions.items():
+            if path not in bound:
+                s.reg = None
+
+    def _publish_board(self, live, states, entries, now):
+        from . import focus
+        self.board_doc = attention.build_board(
+            live, states, entries, self.cfg, now=now,
+            focus=focus.enabled(self.cfg))
+        if self.hooks is not None:
+            self.hooks.feed.publish(self.board_doc)
 
     def _write_fleet(self, pkt, now):
         """Snapshot the packet to fleet.json for local readers (csb.board,
@@ -231,6 +321,9 @@ class BridgeCore:
         return routed
 
     def _route_hook(self, ev, now):
+        if ev.get("_cmd"):
+            self._command(ev)
+            return None
         path = ev.get("transcript_path") or ""
         sid = ev.get("session_id") or ""
         if not path and sid:
@@ -251,6 +344,17 @@ class BridgeCore:
             self.rescan(now)
             s = self.sessions.get(path, s)
         return s
+
+    def _command(self, ev):
+        """Board-originated commands, executed on the bridge thread (the
+        HTTP thread only enqueues). Today: focus — jump to a session's
+        terminal where an adapter exists; nothing depends on it working."""
+        if ev["_cmd"] == "focus":
+            from . import focus
+            for s in self.sessions.values():
+                if s.session_id == ev.get("sid"):
+                    focus.focus_session(self, s)
+                    return
 
     def _limit_alerts(self, now):
         """Announce a newly-hit rate limit once per cooldown window; the
