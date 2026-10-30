@@ -98,6 +98,7 @@ chunks; SY6970 charger needs reg 0x00=0x3F, 0x09=0x64 when battery-less.
 | Every session missing in registry mode | `procStart` (UTC) compared to local-time `ps` | registry.py runs `ps` with `TZ=UTC`; keep it |
 | Status line says "board: bridge off" | No fresh fleet.json (>10 s) | Start the bridge |
 | Web board 403 | Opened via a hostname other than 127.0.0.1/localhost | Use `http://127.0.0.1:45732/` (Host check blocks DNS rebinding) |
+| Web board won't load on 45732 | Port was taken; listener fell back to an auto port | `cat bridge/hook-port` for the real port (`hooks_enabled: false` also disables the board) |
 
 ## Pointers
 

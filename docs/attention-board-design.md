@@ -27,7 +27,7 @@ queue and run on the bridge thread.
 
 ## Discovery: the live session registry
 
-Claude Code (≥ ~2.1.2xx) keeps `~/.claude/sessions/<pid>.json` for every
+Claude Code (observed from 2.1.312) keeps `~/.claude/sessions/<pid>.json` for every
 running process: `pid`, `sessionId`, `cwd`, `name` + `nameSource`,
 `formerNames`, `status` (`idle`/`busy`), `waitingFor`, `kind`,
 `procStart`, `messagingSocketPath`. `csb/registry.py` reads it each step:

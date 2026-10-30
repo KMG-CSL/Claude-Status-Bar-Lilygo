@@ -120,10 +120,11 @@ cd bridge
 ./.venv/bin/python -m csb.statusline install   # or: uninstall | status
 ```
 
-- **Hooks** merges 10 tagged entries (`"_tag": "claudestatusbar"`) into
-  `~/.claude/settings.json`; each is a one-liner that POSTs the hook JSON to
+- **Hooks** merges 10 entries into `~/.claude/settings.json`, recognized
+  as ours by a marker in the command string (no custom keys: Claude Code
+  strips them on rewrite); each is a one-liner that POSTs the hook JSON to
   the bridge's localhost listener, backgrounded so Claude never blocks even
-  with the bridge down. `uninstall` removes only our tagged entries.
+  with the bridge down. `uninstall` removes only our entries.
 - **Statusline** wraps your existing statusline command as
   `our-collector | your-command` (output stays byte-identical) and drops
   per-session capture files under the bridge data dir. `uninstall` restores

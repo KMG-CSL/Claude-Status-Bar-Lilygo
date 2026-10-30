@@ -2,8 +2,8 @@
 
 ## Coming back to this? Upgrade steps (2026-10-31)
 
-If you set this up in the summer, `git pull` and then do these steps. A
-fresh setup can skip this section and start at step 0.
+If you set this up in the summer, `git pull` and then do these steps from
+the repo root. A fresh setup can skip this section and start at step 0.
 
 What's new: a **browser board** (lanes for *needs you / rate-limited /
 ready for review / running / done / parked*, with cards showing your
@@ -12,20 +12,29 @@ exact session discovery from Claude Code's own live session registry, a
 durable "unread" flag, and a display that **keeps breathing** on any
 session waiting for you. Why and how: [attention-board-design.md](attention-board-design.md).
 
+0. **Stop the bridge/app** if it's running.
 1. **Re-install the hooks.** The event set grew from 8 to 10, and
    Notification lost its filter. Without this the board still works,
    with less exact state:
    ```sh
-   cd bridge && ./.venv/bin/python -m csb.hooks install
-   ./.venv/bin/python -m csb.hooks status   # no "MISSING:" line = done
+   (cd bridge && ./.venv/bin/python -m csb.hooks install \
+              && ./.venv/bin/python -m csb.hooks status)
    ```
-2. **Reflash the display.** This adds the breathing animation and
-   unread-vs-seen done cells. Stop the bridge/app first:
-   `firmware/build_and_flash.sh`. A new bridge with old firmware still
-   works; you just don't get the new animation.
-3. **Restart the bridge** (`bridge/run_bridge.sh` or `bridge/run_app.sh`),
-   then open **http://127.0.0.1:45732/**. It's localhost only, served by
-   the bridge itself, with nothing else to install.
+   Done when status lists 10 events and prints neither `MISSING:` nor
+   `STALE:`. New Claude Code sessions get the new hooks; already-running
+   sessions may keep the old set until restarted (the board works either
+   way, falling back to the registry and transcripts).
+2. **Reflash the display**: `firmware/build_and_flash.sh` (add
+   `--port /dev/cu.usbmodemXXXX` if needed), then unplug/replug. This
+   adds the breathing animation and unread-vs-seen done cells. A new
+   bridge with old firmware still works; you just don't get the new
+   animation.
+3. **Start one of** `bridge/run_bridge.sh` or `bridge/run_app.sh`, then
+   open **http://127.0.0.1:45732/**. It's localhost only, served by the
+   bridge itself, with nothing else to install. If that port was taken,
+   the bridge picks another and writes it to `bridge/hook-port`, so use
+   `http://127.0.0.1:$(cat bridge/hook-port)/`. The board rides on the
+   hook listener, so `"hooks_enabled": false` turns it off too.
 4. Optional: a terminal **status line** showing who's waiting. Point
    `statusLine.command` in `~/.claude/settings.json` at
    `PYTHONPATH=<repo>/bridge <repo>/bridge/.venv/bin/python -m csb.board line --dir <repo>/bridge/statusline`
@@ -33,8 +42,9 @@ session waiting for you. Why and how: [attention-board-design.md](attention-boar
    `csb.statusline install`). Run `python -m csb.board` for the full board
    in a terminal.
 
-Nothing to configure: if your Claude Code is recent enough to write
-`~/.claude/sessions/*.json`, discovery uses it automatically.
+Nothing to configure: if your Claude Code writes
+`~/.claude/sessions/*.json` (observed from 2.1.312), discovery uses it
+automatically; older versions keep the transcript-scan fallback.
 
 ---
 
@@ -55,7 +65,7 @@ step 2 flashes right over it.
 - **Desktop app** (`bridge/run_app.sh`, optional but nicer — live preview of
   the display): needs tkinter, which Apple's python3 doesn't ship. Install
   Homebrew Python + Tk: `brew install python3 python-tk`. The app venv
-  auto-installs `pillow` and `pystray` itself.
+  auto-installs `pillow` itself (only the logo tool needs it).
 
 ```sh
 git clone git@github.com:KMG-CSL/Claude-Status-Bar-Lilygo.git
@@ -109,10 +119,10 @@ Open a terminal, run `claude`, ask it something — a session cell should
 appear within a few seconds. Tap to cycle sessions, swipe left/right ditto,
 touch-and-hold ~0.6 s for the usage page.
 
-Hold is remappable: set `"hold": "focus"` in `bridge/config.json` and a
+Hold is remappable: set `"input": {"hold": "focus"}` in `bridge/config.json` and a
 long-press raises that session's terminal window instead (macOS/iTerm2
 only for now) — move the usage page to the BOOT button with
-`"boot_short": "usage"`. See `bridge/config.example.json`.
+`"input": {"boot_short": "usage"}`. See `bridge/config.example.json`.
 
 ## 4. Report your touch revision (please!)
 
