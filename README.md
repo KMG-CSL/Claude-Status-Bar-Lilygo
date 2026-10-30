@@ -16,6 +16,36 @@ See [Relationship to upstream](#relationship-to-upstream).
      upstream's original single-session layout and predates the minimap. -->
 ![Live session status (upstream layout — new photo pending)](docs/images/LilyGo1.png)
 
+## What's new (2026-10-31)
+
+- **Browser board** at `http://127.0.0.1:45732/`: served by the bridge's
+  existing localhost listener (no new process). Sessions sort themselves
+  into lanes: *needs you* (permission / plan / question / error),
+  *rate-limited*, *ready for review* (finished, not read yet), *running*,
+  *done*, *parked*. Cards show project, name, current task, your last
+  prompt, the end of Claude's last reply, subagents, and cross-session
+  messages. Live over SSE, with a needs-you count in the tab title.
+- **Live session registry**: when Claude Code writes
+  `~/.claude/sessions/<pid>.json`, discovery uses it. That gives the exact
+  live set, follows `/clear` and `/rename`, and keeps quiet-but-alive
+  sessions (they park instead of vanishing). The old transcript walk is
+  the fallback.
+- **Unread**: a finished turn you haven't replied to. Worked out from the
+  transcript (peer messages don't count as you looking), so it survives
+  restarts.
+- **Hooks**: 10 events now. `StopFailure` ends turns that die on API
+  errors (no more "working forever"), `SubagentStart` gives exact
+  subagent tracking, and Notification is routed by type (the idle nag is
+  ignored). `csb.hooks status` reports missing events.
+- **Display**: waiting cells breathe until handled (faster after 5 min),
+  and unread-done is drawn distinctly from seen-done. Needs a reflash.
+- **Stingy chime**: an orchestrator chimes once, when its last worker
+  finishes, not on every interim stop.
+- **Terminal status line**: `python -m csb.board line` (see below).
+
+Upgrading from July: [docs/ART-SETUP.md](docs/ART-SETUP.md#coming-back-to-this-upgrade-steps-2026-10-31).
+Design and rationale: [docs/attention-board-design.md](docs/attention-board-design.md).
+
 ## Features (as of 2026-07-24)
 
 - **Fleet minimap** — left column shows one cell per session (up to 8):
@@ -90,7 +120,7 @@ cd bridge
 ./.venv/bin/python -m csb.statusline install   # or: uninstall | status
 ```
 
-- **Hooks** merges 11 tagged entries (`"_tag": "claudestatusbar"`) into
+- **Hooks** merges 10 tagged entries (`"_tag": "claudestatusbar"`) into
   `~/.claude/settings.json`; each is a one-liner that POSTs the hook JSON to
   the bridge's localhost listener, backgrounded so Claude never blocks even
   with the bridge down. `uninstall` removes only our tagged entries.
@@ -98,6 +128,11 @@ cd bridge
   `our-collector | your-command` (output stays byte-identical) and drops
   per-session capture files under the bridge data dir. `uninstall` restores
   your original command exactly.
+- **Or** use the status line row instead: set `statusLine.command` to
+  `PYTHONPATH=<repo>/bridge <repo>/bridge/.venv/bin/python -m csb.board line --dir <repo>/bridge/statusline`.
+  It runs the same collector and prints `ctx 34% │ ⏳ waiting on you:
+  brain-sync 4m │ 3 running` (or "bridge off" when the bridge isn't up).
+  `python -m csb.board` prints the whole fleet as a table.
 
 ## Configuration
 
@@ -113,7 +148,9 @@ The most useful knobs:
 |---|---|---|
 | `port` | auto | Serial port override (`/dev/cu.usbmodemXXXX`, `COM5`) |
 | `max_sessions` | 8 | Sessions shown (firmware cap: 8) |
-| `active_window_min` | 30 | Sessions silent longer than this drop off the display |
+| `active_window_min` | 30 | Sessions silent longer than this drop off the display (fallback mode only; with the session registry, a session shows for as long as its process lives) |
+| `parked_after_s` | 14400 | Web board: quiet this long → Parked lane |
+| `registry_enabled` | true | Discover sessions from `~/.claude/sessions/*.json` when present |
 | `idle_after_s` | 120 | Event-silence before a session reads idle/done |
 | `approval_silence_s` | 20 | Pending tool + this much write-silence → "needs approval" (uninstrumented sessions; hooks make this instant) |
 | `done_after_s` | 30 | Write-silence after an assistant message → Done |

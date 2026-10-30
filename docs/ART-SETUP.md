@@ -1,5 +1,43 @@
 # Art's ten-minute setup (macOS)
 
+## Coming back to this? Upgrade steps (2026-10-31)
+
+If you set this up in the summer, `git pull` and then do these steps. A
+fresh setup can skip this section and start at step 0.
+
+What's new: a **browser board** (lanes for *needs you / rate-limited /
+ready for review / running / done / parked*, with cards showing your
+last prompt, Claude's last reply, subagents and cross-session messages),
+exact session discovery from Claude Code's own live session registry, a
+durable "unread" flag, and a display that **keeps breathing** on any
+session waiting for you. Why and how: [attention-board-design.md](attention-board-design.md).
+
+1. **Re-install the hooks.** The event set grew from 8 to 10, and
+   Notification lost its filter. Without this the board still works,
+   with less exact state:
+   ```sh
+   cd bridge && ./.venv/bin/python -m csb.hooks install
+   ./.venv/bin/python -m csb.hooks status   # no "MISSING:" line = done
+   ```
+2. **Reflash the display.** This adds the breathing animation and
+   unread-vs-seen done cells. Stop the bridge/app first:
+   `firmware/build_and_flash.sh`. A new bridge with old firmware still
+   works; you just don't get the new animation.
+3. **Restart the bridge** (`bridge/run_bridge.sh` or `bridge/run_app.sh`),
+   then open **http://127.0.0.1:45732/**. It's localhost only, served by
+   the bridge itself, with nothing else to install.
+4. Optional: a terminal **status line** showing who's waiting. Point
+   `statusLine.command` in `~/.claude/settings.json` at
+   `PYTHONPATH=<repo>/bridge <repo>/bridge/.venv/bin/python -m csb.board line --dir <repo>/bridge/statusline`
+   (it also feeds the bridge's context/rate-limit capture, so it replaces
+   `csb.statusline install`). Run `python -m csb.board` for the full board
+   in a terminal.
+
+Nothing to configure: if your Claude Code is recent enough to write
+`~/.claude/sessions/*.json`, discovery uses it automatically.
+
+---
+
 You have: a LilyGo T-Display-S3-Long, a USB-C **data** cable, a Mac.
 Out of the box the board shows LilyGo's factory WiFi demo — ignore it,
 step 2 flashes right over it.

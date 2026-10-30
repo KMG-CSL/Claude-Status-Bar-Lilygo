@@ -1,8 +1,14 @@
 # Claude Status Bar — lab notebook
 
 Desk display for a Claude Code fleet. PC-side Python bridge (`bridge/`,
-package `bridge/csb/`) tails transcripts + receives hook events, sends JSON
-over USB serial to an ESP32-S3 sketch (`firmware/claude_statusbar/`).
+package `bridge/csb/`) discovers sessions from Claude Code's live registry
+(`~/.claude/sessions/<pid>.json`; transcript walk as fallback), tails
+transcripts + receives hook events, and feeds one engine to two
+consumers: JSON over USB serial to an ESP32-S3 sketch
+(`firmware/claude_statusbar/`), and a browser board on the hook listener
+(`http://127.0.0.1:45732/`, csb/web.py + csb/board.html + csb/attention.py).
+Read docs/attention-board-design.md before changing lanes, unread, the
+registry tier, or the web endpoints.
 
 ## Commands that work
 
@@ -15,6 +21,8 @@ bridge/run_app.sh                       # desktop app w/ live display preview
 cd bridge && ./.venv/bin/python -m unittest discover -s tests -v   # all tests
 ./.venv/bin/python -m csb.hooks install|uninstall|status           # opt-in
 ./.venv/bin/python -m csb.statusline install|uninstall|status      # opt-in
+./.venv/bin/python -m csb.board [line]   # fleet table / statusLine row (reads fleet.json)
+open http://127.0.0.1:45732/             # web board (bridge must be running)
 ```
 
 Tests never open serial ports, hit the network, or touch `~/.claude/`
@@ -38,6 +46,7 @@ Contract is frozen; new fields are additive only (firmware ignores unknowns).
 | td | detail (≤32) | | **lim** | rate-limit reset epoch, 0=none |
 | sa | live subagent count | | **src** | evidence: h(ook)/t(ranscript)/m(time) |
 | ef | effort level | | **fin** | turn outcome ok/fail/cancel/"" |
+| pm | permission-mode badge | | **ur** | 1 = finished, not seen (unread) |
 
 Also: `{"t":"cf",tap,swipe,hold,bshort,blong}` input bindings on connect;
 `{"t":"lg",off,px,last}` logo chunks (48×48 RGB565 LE) + `{"t":"lgclr"}`;
@@ -85,11 +94,16 @@ chunks; SY6970 charger needs reg 0x00=0x3F, 0x09=0x64 when battery-less.
 | Flash fails "port busy" | Bridge/app holds the port | Stop them first; if still stuck: hold BOOT, replug, release |
 | Display stuck "Bridge offline" | Bridge died / wrong port | Restart `bridge/run_bridge.sh`, `--port` to override, `--scan` to sanity-check |
 | Tap fires on every swipe | Phantom down/up after lift | Cooldowns above — check they're intact |
+| Session stuck "working" after an API error | Hooks predate StopFailure | `python -m csb.hooks status` shows MISSING → re-run `install` |
+| Every session missing in registry mode | `procStart` (UTC) compared to local-time `ps` | registry.py runs `ps` with `TZ=UTC`; keep it |
+| Status line says "board: bridge off" | No fresh fleet.json (>10 s) | Start the bridge |
+| Web board 403 | Opened via a hostname other than 127.0.0.1/localhost | Use `http://127.0.0.1:45732/` (Host check blocks DNS rebinding) |
 
 ## Pointers
 
 - docs/HOW_IT_WORKS.md — architecture + all hardware gotchas, in order hit
 - docs/bridge-v2-design.md — state engine tiers, hooks/statusline design, wire rules
+- docs/attention-board-design.md — web board, lanes, unread, registry tier, hooks, endpoint security
 - docs/kvm-design.md — long-press → focus terminal (future)
 - BACKLOG.md — priorities; items graduate to upstream PRs when proven
 - research/things-to-steal.md — ecosystem survey the v2 design draws from

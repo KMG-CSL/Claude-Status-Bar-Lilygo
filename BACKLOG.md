@@ -2,6 +2,24 @@
 
 Rough priority order. Items graduate to upstream PRs once proven on real hardware.
 
+## Attention board follow-ups (shipped 2026-10-31; see docs/attention-board-design.md)
+- **Panel check of the breathing animation**: compile-verified only. The
+  >5-min pulse dims orange to 40 % and the black letter may lose contrast
+  at the trough.
+- **Linux run of the registry**: code is cross-platform, not yet run on
+  the Linux box (Ptyxis, no tmux; set focus adapter "none" there).
+- **"Done, seen" is rarely populated**: seen = you prompted the session
+  again, so finished sessions sit in Review until you reply or park after
+  4 h. If that's too sticky: click-to-dismiss on the card (~10 lines,
+  POST like /api/focus, a per-session seen-at in the bridge).
+- **Registry status vocabulary**: only `idle`/`busy` and a null
+  `waitingFor` have been observed. The tier treats any non-null
+  `waitingFor` (or `status == "waiting"`) as a dialog; confirm the real
+  values when one shows up.
+- **flashUntil[] indexed by array position**, not slot: a reorder can land
+  the edge blink on the wrong cell (pre-existing).
+- **Desktop app preview** doesn't render the breath or `ur` yet.
+
 ## Timer / displayed-value audit (rigor pass)
 The elapsed clock can feel decoupled from reality. Trace and document where
 every on-screen value comes from, end to end, and verify continuity across
@@ -151,12 +169,15 @@ The AXS15231B (old hw revision) touch path in touch_drv.h is implemented from
 LilyGo's example but untested on real hardware. Flash display #2 when it
 arrives; auto-detect reports the revision on boot.
 
-## Stale-but-unanswered sessions
-Sessions that ended on a question age out of the 30-min display window and
-vanish — arguably the ones most worth remembering. Ideas: dim orange count on
-the usage page, or extend the window for wait-state sessions only.
+## Stale-but-unanswered sessions — addressed 2026-10-31
+With the session registry, a session stays listed for as long as its
+process lives (no 30-min window); the web board parks quiet ones with
+their unread dot. Machines without a registry still use the window.
 
-## "Done + N subagents" — bug or feature? (decide after ecosystem survey)
+## "Done + N subagents" — decided 2026-10-31: it's Running
+The web board puts a done-but-delegating parent in Running ("Delegating ·
+N agents"), it is not unread, and it chimes once when the last worker
+finishes (attention.is_settled). Original notes:
 Observed live: main session shows Done while 6 workflow subagents run in the
 background. Technically true (the turn ended, the user CAN reply) but "Done"
 undersells that work is still in flight. Candidate treatments: a distinct
@@ -167,6 +188,7 @@ overnight survey) model "idle orchestrator, busy workers".
 
 ## Small polish
 - Desktop app preview parity with the redesigned firmware layout (rows drift).
-- Waiting-escalation: flash/tint after a session waits > N minutes.
+- ~~Waiting-escalation: flash/tint after a session waits > N minutes.~~
+  Done 2026-10-31: the breath quickens after 5 min.
 - Swipe direction sanity check when the display is flipped 180°.
 - README "what's different in this fork" section for visitors from upstream.
