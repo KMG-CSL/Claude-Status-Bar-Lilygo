@@ -44,6 +44,14 @@ class SummarizeTest(unittest.TestCase):
         self.assertIn("x" * (board.NAME_MAX - 1) + "…", out)
         self.assertNotIn("x" * board.NAME_MAX, out)
 
+    def test_hostile_title_stays_one_clean_line(self):
+        doc = {"ses": [ses("first\nsecond\x1b[31m red\x1b]0;pwn\x07 \x1b[2J",
+                           "wait", el=5, at=True)]}
+        out = board.summarize(doc, color=False)
+        self.assertNotIn("\n", out)
+        self.assertNotIn("\x1b", out)
+        self.assertIn("first second red", out)
+
     def test_fmt_age(self):
         self.assertEqual(board.fmt_age(None), "0s")
         self.assertEqual(board.fmt_age(59), "59s")
@@ -87,6 +95,33 @@ class FleetFileTest(unittest.TestCase):
         self.assertTrue(out.startswith("ctx 34% │ "))
         self.assertIn("waiting on you: brain 4m", out)
         self.assertNotIn("session_id", out)
+
+    def _cli_line(self, env, stdin=b"{}"):
+        import subprocess
+        import sys
+        bridge = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        full = dict(os.environ, PYTHONPATH=bridge, **env)
+        return subprocess.run(
+            [sys.executable, "-m", "csb.board", "line",
+             "--dir", self.tmp.name],
+            input=stdin, capture_output=True, env=full, timeout=30)
+
+    def test_cli_stdout_is_exactly_one_row_despite_logs(self):
+        # an env override makes load_config() log; CSB_DEBUG makes the
+        # collector log its capture failure on bad stdin — both to stderr
+        r = self._cli_line({"CSB_DATA_DIR": self.tmp.name,
+                            "CSB_FLEET_FILE": self.path, "CSB_DEBUG": "1"},
+                           stdin=b"not json")
+        self.assertEqual(r.returncode, 0)
+        self.assertEqual(r.stdout.decode().count("\n"), 1)
+        self.assertIn("board: bridge off", r.stdout.decode())
+
+    def test_cli_config_failure_still_prints_a_row(self):
+        blocker = os.path.join(self.tmp.name, "file")
+        open(blocker, "w").close()
+        r = self._cli_line({"CSB_DATA_DIR": os.path.join(blocker, "sub")})
+        self.assertEqual(r.returncode, 0)
+        self.assertEqual(r.stdout.decode(), "board: error\n")
 
     def test_board_lists_waits_first(self):
         cfg = base_cfg(fleet_file=self.path)

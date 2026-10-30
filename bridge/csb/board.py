@@ -16,8 +16,10 @@ says so instead of showing a frozen fleet.
 """
 
 import argparse
+import contextlib
 import json
 import os
+import re
 import sys
 import time
 
@@ -30,6 +32,10 @@ NAME_MAX = 24
 ORANGE = "\033[38;5;173m"
 DIM = "\033[2m"
 RESET = "\033[0m"
+
+# titles come from transcripts: one line, no terminal control sequences
+_CTRL = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?"
+                   r"|[\x00-\x1f\x7f-\x9f]")
 
 
 def fleet_path(cfg):
@@ -59,7 +65,8 @@ def fmt_age(seconds):
 
 
 def _name(e):
-    nm = (e.get("nm") or e.get("pj") or "?").strip()
+    nm = " ".join(_CTRL.sub(" ", str(e.get("nm") or e.get("pj") or "?"))
+                  .split()) or "?"
     return nm if len(nm) <= NAME_MAX else nm[:NAME_MAX - 1] + "…"
 
 
@@ -137,16 +144,18 @@ def main(argv=None):
     ap.add_argument("cmd", nargs="?", default="board", choices=("board", "line"))
     ap.add_argument("--dir", default="", help="statusline capture dir")
     args = ap.parse_args(argv)
-    cfg = load_config()
     if args.cmd == "line":
+        # the row is the ONLY stdout: config/collector logs go to stderr,
+        # and nothing (config included) may fail the statusline
         try:
-            out = line(sys.stdin.buffer.read(), cfg,
-                       capture_dir=args.dir or None)
+            with contextlib.redirect_stdout(sys.stderr):
+                out = line(sys.stdin.buffer.read(), load_config(),
+                           capture_dir=args.dir or None)
         except Exception:
             out = "board: error"
         sys.stdout.write(out + "\n")
     else:
-        print(board(cfg))
+        print(board(load_config()))
 
 
 if __name__ == "__main__":
