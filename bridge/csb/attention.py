@@ -18,6 +18,7 @@ survives bridge restarts because both timestamps come from the
 transcript.
 """
 
+import re
 import socket
 import time
 
@@ -99,10 +100,41 @@ def chime_state(session, r, cfg, now):
     return "done" if is_unread(session, r, cfg, now) else "idle"
 
 
-def card(session, r, entry, lane, cfg, now):
+_REF = re.compile(r"\s*\[[^\]]*\]\s*$")
+
+
+def split_traffic(session, live):
+    """-> (peers, traffic). Peers are messages to/from OTHER live sessions
+    in the registry (matched by pid, else by name with any " [ref]"
+    suffix dropped); everything else — subagent handbacks, SendMessage to
+    raw agent ids or "main", senders that have since exited — is the
+    session's own worker traffic and goes with its subagents."""
+    reg = session.reg or {}
+    own_pid = reg.get("pid") or session.claude_pid or 0
+    own_name = reg.get("name") or ""
+    peers, traffic = [], []
+    for d, name, ts, gist, pid in reversed(session.peers):
+        bare = _REF.sub("", name)
+        hit = False
+        shown = name
+        if live is not None:
+            if pid:
+                hit = pid in live["pids"] and pid != own_pid
+                shown = live["pids"].get(pid) or bare
+            else:
+                hit = bare in live["names"] and bare != own_name
+                shown = bare
+        item = {"dir": d, "name": shown if hit else name, "ts": ts,
+                "gist": gist}
+        (peers if hit else traffic).append(item)
+    return peers, traffic
+
+
+def card(session, r, entry, lane, cfg, now, live=None, jump=False):
     reg = session.reg or {}
     subs = [{"type": t or "agent", "age": int(now - t0)}
             for t, t0 in session.subagents.values()]
+    peers, traffic = split_traffic(session, live)
     return {
         "sid": session.session_id,
         "slot": entry.get("sl"),
@@ -134,9 +166,10 @@ def card(session, r, entry, lane, cfg, now):
         "subagents": subs,
         "sa": entry.get("sa", 0),
         "delegating": len(session.task_ids),
-        "peers": [{"dir": d, "name": n, "ts": t, "gist": g}
-                  for d, n, t, g in reversed(session.peers)],
+        "peers": peers,
+        "traffic": traffic,
         "pid": reg.get("pid") or session.claude_pid or 0,
+        "jump": bool(jump),
         "kind": reg.get("kind") or "",
         "started": (reg.get("startedAt") or 0) / 1000.0,
     }
@@ -152,16 +185,29 @@ _SORT = {
 }
 
 
-def build_board(live, states, entries, cfg, now=None, focus=False):
+def build_board(live, states, entries, cfg, now=None, focus=False,
+                registry=None, can_jump=None):
     """-> board document for the web view. `entries` are the per-session
     wire dicts (slot letters, pretty model, ctx %) so the two consumers
-    agree on every number they share."""
+    agree on every number they share. `registry` is the live registry
+    ({sessionId: entry}, None without one) for peer matching; can_jump(s)
+    says whether a focus adapter can actually act on that session."""
+    peers_live = None
+    if registry is not None:
+        peers_live = {
+            "pids": {e["pid"]: str(e.get("name") or "")
+                     for e in registry.values()
+                     if isinstance(e.get("pid"), int)},
+            "names": {str(e.get("name")) for e in registry.values()
+                      if e.get("name")},
+        }
     if now is None:
         now = time.time()
     lanes = {k: [] for k in LANES}
     for s, r, e in zip(live, states, entries):
         ln = lane_of(s, r, cfg, now)
-        lanes[ln].append(card(s, r, e, ln, cfg, now))
+        lanes[ln].append(card(s, r, e, ln, cfg, now, live=peers_live,
+                              jump=bool(can_jump and can_jump(s))))
     for k in LANES:
         lanes[k].sort(key=_SORT[k])
     return {

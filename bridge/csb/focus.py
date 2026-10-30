@@ -62,6 +62,19 @@ def adapter_for(cfg):
     return name
 
 
+def can_act(cfg, env):
+    """Whether this platform's adapter can actually bring THIS session
+    (given its process env) to the front — the board shows Jump only
+    then. iTerm2 can select only its own tabs; tmux needs the session to
+    be inside tmux (a bare Ptyxis/Wayland window has nothing to drive)."""
+    name = adapter_for(cfg)
+    if name == "iterm2":
+        return env.get("TERM_PROGRAM") == "iTerm.app"
+    if name == "tmux":
+        return bool(env.get("TMUX"))
+    return False
+
+
 def enabled(cfg):
     """True when a focus request would actually be attempted."""
     return bool(adapter_for(cfg))

@@ -3,6 +3,7 @@ transcript discovery."""
 
 import json
 import os
+import re
 import time
 from collections import deque
 
@@ -52,6 +53,12 @@ PROMPT_MAX = 600
 REPLY_MAX = 1200
 
 
+def _sock_pid(addr):
+    """uds:/tmp/cc-socks/<pid>.sock -> pid, else 0."""
+    m = re.search(r"/(\d+)\.sock$", str(addr or ""))
+    return int(m.group(1)) if m else 0
+
+
 def _one_line(text, cap):
     return " ".join((text or "").split())[:cap]
 
@@ -98,7 +105,10 @@ class Session:
         self.last_prompt_ts = None    # ...and when: "seen" for unread
         self.last_reply_ts = None     # newest assistant text record
         self.current_task = ""        # TodoWrite in_progress item
-        self.peers = deque(maxlen=8)  # (dir "in"|"out", name, ts, gist)
+        # cross-session traffic, unfiltered: (dir "in"|"out", name, ts,
+        # gist, pid or 0). attention.card splits it into live peers vs
+        # subagent/worker traffic using the live registry.
+        self.peers = deque(maxlen=12)
         self.subagents = {}           # agent_id -> (agent_type, start ts)
         self.reg = None               # live registry entry (csb.registry)
         self.pending_tool = ""        # tool name awaiting result
@@ -259,8 +269,12 @@ class Session:
             origin = rec.get("origin")
             kind = origin.get("kind") if isinstance(origin, dict) else None
             if not has_tool_result and kind == "peer":
-                self.peers.append(("in", str(origin.get("name") or "?"), ts,
-                                   _one_line(origin.get("body"), 160)))
+                pid = origin.get("verifiedPeerPid")
+                self.peers.append((
+                    "in", str(origin.get("name") or origin.get("from") or "?"),
+                    ts, _one_line(origin.get("body"), 160),
+                    pid if isinstance(pid, int) else _sock_pid(
+                        origin.get("from"))))
             # a HUMAN prompt is what "seen" means (the user replied to the
             # session). Peer messages, task notifications and other
             # injected turns start work but are not the user looking.
@@ -341,9 +355,11 @@ class Session:
         if not isinstance(inp, dict):
             return
         if name == "SendMessage":
-            self.peers.append(("out", str(inp.get("to") or "?")[:60], ts,
+            to = str(inp.get("to") or "?")[:80]
+            self.peers.append(("out", to, ts,
                                _one_line(inp.get("summary")
-                                         or inp.get("message"), 160)))
+                                         or inp.get("message"), 160),
+                               _sock_pid(to)))
         elif name == "TodoWrite":
             todos = inp.get("todos")
             if isinstance(todos, list):

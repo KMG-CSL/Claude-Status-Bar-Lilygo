@@ -6,8 +6,10 @@ Rough priority order. Items graduate to upstream PRs once proven on real hardwar
 - **Panel check of the breathing animation**: compile-verified only. The
   >5-min pulse dims orange to 40 % and the black letter may lose contrast
   at the trough.
-- **Linux run of the registry**: code is cross-platform, not yet run on
-  the Linux box (Ptyxis, no tmux; set focus adapter "none" there).
+- **Configurable pulse speed**: today the breath is calm for 5 min then
+  quickens (good default). Make the periods and the 5-min threshold
+  configurable (pushed in the cf packet), with an "inverse" option: fast
+  when the wait is new, slowing over time.
 - **"Done, seen" is rarely populated**: seen = you prompted the session
   again, so finished sessions sit in Review until you reply or park after
   4 h. If that's too sticky: click-to-dismiss on the card (~10 lines,

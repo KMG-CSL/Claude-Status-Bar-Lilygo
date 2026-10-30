@@ -95,7 +95,7 @@ chunks; SY6970 charger needs reg 0x00=0x3F, 0x09=0x64 when battery-less.
 | Display stuck "Bridge offline" | Bridge died / wrong port | Restart `bridge/run_bridge.sh`, `--port` to override, `--scan` to sanity-check |
 | Tap fires on every swipe | Phantom down/up after lift | Cooldowns above — check they're intact |
 | Session stuck "working" after an API error | Hooks predate StopFailure | `python -m csb.hooks status` shows MISSING → re-run `install` |
-| Every session missing in registry mode | `procStart` (UTC) compared to local-time `ps` | registry.py runs `ps` with `TZ=UTC`; keep it |
+| Every session missing in registry mode | `procStart` compared in the wrong form | Linux: `/proc/<pid>/stat` field 22 (after the last `)`, index 19); macOS: `ps -o lstart=` with `TZ=UTC`. See registry._proc_start |
 | Status line says "board: bridge off" | No fresh fleet.json (>10 s) | Start the bridge |
 | Web board 403 | Opened via a hostname other than 127.0.0.1/localhost | Use `http://127.0.0.1:45732/` (Host check blocks DNS rebinding) |
 | Web board won't load on 45732 | Port was taken; listener fell back to an auto port | `cat bridge/hook-port` for the real port (`hooks_enabled: false` also disables the board) |

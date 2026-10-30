@@ -34,6 +34,15 @@
   body.off #offline { display: block; }
   body.off main { opacity: .45; }
   main { padding: 4px 20px 30px; }
+  /* wide screens: lanes side by side (kanban); empty and collapsed lanes
+     shrink to a header so the live ones get the room. Narrow: stacked. */
+  @media (min-width: 1000px) {
+    main { display: flex; gap: 14px; align-items: flex-start; }
+    .lane { flex: 1 1 0; min-width: 260px; margin-top: 6px; }
+    .lane.empty, .lane.collapsed { flex: 0 0 auto; min-width: 0;
+                                   width: 118px; }
+    .lane .cards { grid-template-columns: 1fr; }
+  }
   .lane { margin: 10px 0 4px; }
   .lane > h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
                color: var(--dim); margin: 0 0 6px; font-weight: 600;
@@ -75,7 +84,7 @@
   .row { margin-top: 5px; font-size: 13px; color: var(--text);
          display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden;
          -webkit-line-clamp: 2; overflow-wrap: anywhere; }
-  .row.reply { -webkit-line-clamp: 4; }
+  .row.reply { display: block; -webkit-line-clamp: unset; }
   .card.open .row { -webkit-line-clamp: unset; }
   .row .who { color: var(--dim); font-weight: 600; margin-right: 4px; }
   .chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
@@ -84,6 +93,9 @@
           max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
   .chip.peer-in::before { content: "← "; }
   .chip.peer-out::before { content: "→ "; }
+  .chip.sub-in::before { content: "↩ "; }
+  .chip.sub-out::before { content: "↪ "; }
+  .chip.sub-in, .chip.sub-out { border: 1px dashed var(--line); }
   .foot { display: flex; gap: 10px; margin-top: 8px; color: var(--dim);
           font-size: 12px; align-items: center; }
   .foot button { margin-left: auto; font: inherit; color: var(--text);
@@ -115,6 +127,7 @@ const NEED = { permission: "Needs approval", plan: "Plan to approve",
                question: "Asked you a question", error: "Error" };
 
 let doc = null, skew = 0, lastMsg = 0;
+const open = new Set();          // expanded cards, by session id
 
 function ago(ts) {
   if (!ts) return "";
@@ -162,9 +175,10 @@ function stateLine(c) {
   }
 }
 
-function card(c) {
+function card(c, isOpen) {
   const d = el("div", "card " + c.lane +
-    (c.lane === "needs" && c.el + live() > 300 ? " long" : ""));
+    (c.lane === "needs" && c.el + live() > 300 ? " long" : "") +
+    (isOpen ? " open" : ""));
   d.dataset.sid = c.sid;
   const top = el("div", "top");
   top.append(el("span", "slot",
@@ -178,7 +192,8 @@ function card(c) {
   d.append(el("div", "state " + c.lane, stateLine(c)));
   if (c.task) d.append(row("Task", c.task));
   if (c.prompt) d.append(row("You", c.prompt));
-  if (c.reply) d.append(row("Claude", tail(c.reply), "reply"));
+  if (c.reply) d.append(row("Claude", isOpen ? plain(c.reply)
+                                            : lastPara(c.reply), "reply"));
   const chips = el("div", "chips");
   for (const s of c.subagents) chips.append(el("span", "chip",
     s.type + " · " + dur(s.age + live())));
@@ -186,6 +201,12 @@ function card(c) {
     c.sa + " subagent" + (c.sa === 1 ? "" : "s")));
   if (c.delegating && c.st !== "done") chips.append(el("span", "chip",
     c.delegating + " delegated"));
+  for (const t of (c.traffic || []).slice(0, 3)) {
+    const ch = el("span", "chip sub-" + t.dir, shortId(t.name) + " " + ago(t.ts));
+    ch.title = (t.dir === "in" ? "worker handback" : "to worker") +
+      (t.gist ? ": " + t.gist : "");
+    chips.append(ch);
+  }
   for (const p of c.peers.slice(0, 4)) {
     const ch = el("span", "chip peer-" + p.dir, p.name + " " + ago(p.ts));
     ch.title = p.gist || "";
@@ -196,31 +217,50 @@ function card(c) {
   if (chips.childElementCount) d.append(chips);
   const foot = el("div", "foot");
   foot.append(el("span", "", c.started ? "started " + ago(c.started) : ""));
-  if (doc.focus && c.pid) {
+  if (c.jump) {
     const b = el("button", "", "Jump");
     b.title = "Bring this session's terminal to the front";
     b.onclick = (ev) => { ev.stopPropagation(); jump(c.sid); };
     foot.append(b);
   }
   d.append(foot);
-  d.onclick = () => d.classList.toggle("open");
+  d.onclick = () => {
+    if (open.has(c.sid)) open.delete(c.sid); else open.add(c.sid);
+    render();
+  };
   return d;
+}
+// raw agent ids / socket paths -> something chip-sized
+function shortId(n) {
+  const m = /\/(\d+)\.sock$/.exec(n);
+  if (m) return "pid " + m[1];
+  return /^[a-f0-9]{12,}$/i.test(n) ? n.slice(0, 7) : n;
 }
 function row(who, text, cls) {
   const r = el("div", "row" + (cls ? " " + cls : ""));
   r.append(el("span", "who", who), document.createTextNode(text));
   return r;
 }
-// the END of the reply is where Claude left off
-function tail(t) {
-  t = t.trim();
-  return t.length > 600 ? "…" + t.slice(-600) : t;
+// The END of the reply is where Claude left off (often a question), so
+// show its last paragraph, cut from the TOP when long, never the bottom.
+const REPLY_COLLAPSED = 280;
+function plain(t) {
+  return t
+    .replace(/```[\s\S]*?```/g, " ")              // fenced code blocks
+    .replace(/`([^`]*)`/g, "$1")                   // inline code
+    .replace(/(\*\*|__)(.+?)\1/g, "$2")            // bold
+    .replace(/(^|[^\w*])[*_]([^*_\n]+)[*_](?![\w*])/g, "$1$2") // italics
+    .replace(/^#{1,6}\s+/gm, "")                   // headings
+    .trim();
+}
+function lastPara(t) {
+  const paras = plain(t).split(/\n\s*\n/).map(p => p.trim()).filter(Boolean);
+  let p = (paras.pop() || "").replace(/\s+/g, " ");
+  return p.length > REPLY_COLLAPSED ? "…" + p.slice(-REPLY_COLLAPSED) : p;
 }
 
 function render() {
   if (!doc) return;
-  const open = new Set([...document.querySelectorAll(".card.open")]
-    .map(n => n.dataset.sid));
   const main = document.getElementById("main");
   main.replaceChildren();
   for (const [key, label] of LANES) {
@@ -237,11 +277,7 @@ function render() {
     };
     lane.append(h);
     const box = el("div", "cards");
-    for (const c of cards) {
-      const n = card(c);
-      if (open.has(c.sid)) n.classList.add("open");
-      box.append(n);
-    }
+    for (const c of cards) box.append(card(c, open.has(c.sid)));
     lane.append(box);
     main.append(lane);
   }

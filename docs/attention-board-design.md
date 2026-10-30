@@ -33,9 +33,14 @@ running process: `pid`, `sessionId`, `cwd`, `name` + `nameSource`,
 `procStart`, `messagingSocketPath`. `csb/registry.py` reads it each step:
 
 - **live set** = entries whose pid is alive *and* whose `procStart`
-  matches `ps -o lstart=` (re-checked every 60 s, to catch pid reuse).
-  **`procStart` is UTC**, so `ps` runs with `TZ=UTC`. A local-time
-  comparison marks every session dead.
+  matches the process's real start stamp (re-checked every 60 s, to catch
+  pid reuse). The stamp is **platform-specific**, and getting it wrong
+  drops every session:
+  - **Linux**: field 22 of `/proc/<pid>/stat` (starttime, clock ticks
+    since boot). Split after the *last* `)` (comm may contain spaces or
+    parens), and the field is index 19 of the remainder.
+  - **macOS**: `ps -o lstart=`, run with `TZ=UTC` because `procStart` is
+    UTC there.
 - **current transcript** = `<projects root>/<cwd with non-alnum → '-'>/<sessionId>.jsonl`.
   `sessionId` changes on `/clear`, so a pid's transcript moves; the old
   one drops off the board instead of lingering under a stale name.
@@ -131,9 +136,21 @@ All cheap: parsed from records the tailer already reads.
 - **You**: last human prompt (600 chars)
 - **Claude**: the *end* of the last reply (where it left off)
 - subagents (type + age, from hooks), delegated count
-- peers: inbound `origin.kind == "peer"` (sender name), outbound
-  `SendMessage` tool calls (`to`). Shown as chips, not drawn links.
-- Jump: only when a focus adapter exists for the platform; never required
+- peers: messages to or from **other live registry sessions only**
+  (inbound `origin.kind == "peer"` matched by `verifiedPeerPid` or name,
+  outbound `SendMessage` `to` matched by `uds:` socket pid or by name with
+  any ` [ref]` dropped; never self). Everything else — subagent
+  handbacks, `SendMessage` to raw agent ids or `main`, senders that have
+  exited — is the session's own worker traffic, shown with its subagents
+  (dashed chips). Chips, not drawn links.
+- reply: the card shows the reply's **last paragraph**, cut from the top
+  (so a closing question is never lost), markdown emphasis stripped;
+  expanding the card shows the whole tail.
+- Jump: shown only when an adapter can act on *that* session — iTerm2
+  when its `TERM_PROGRAM` is `iTerm.app`, tmux when its own environment
+  has `TMUX`. Read once per pid from the process env. Never required.
+- Layout: lanes side by side at ≥ 1000 px (empty and collapsed lanes
+  shrink to a header), stacked on narrow screens.
 
 ## Security of the localhost endpoints
 
@@ -158,11 +175,12 @@ The listener binds `127.0.0.1` only. Transcript text is sensitive, so:
 
 ## Linux notes
 
-- The registry is cross-platform (`pidDomain: linux`), and `ps -o lstart=`
-  exists on Linux. It has not been run on Linux yet.
+- The registry runs on Linux via `/proc/<pid>/stat` (see above); the full
+  test suite passes in a Debian container, including the Linux-only
+  `/proc` test.
 - Ptyxis has no remote-control API and Wayland blocks focus stealing, so
-  Jump can't work there; set `"focus": {"adapter": "none"}` to hide the
-  button. Nothing else depends on it.
+  Jump can't work there. The button now hides itself for sessions not in
+  tmux; nothing else depends on it.
 - With the board behind a hardware KVM, `/dev/ttyACM0` vanishes when the
   KVM switches away; the serial link already reconnects (EIO / one
   transient EACCES, then reopen) and the next 1 Hz packet carries full state.

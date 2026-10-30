@@ -5,15 +5,17 @@ unread/lanes/stingy chime (csb.attention), the live session registry
 import http.client
 import json
 import os
+import sys
 import tempfile
 import time
 import unittest
 
-from csb import attention
+from csb import attention, focus
 from csb.core import BridgeCore
 from csb.engine import derive
 from csb.hooks import HookListener
-from csb.registry import Registry, transcript_path
+from csb.registry import (Registry, _proc_start, stat_starttime,
+                          transcript_path)
 from tests.helpers import (T0, assistant_text, assistant_tool_use, base_cfg,
                            hook_event, iso, make_session, stub_usage,
                            tool_result, user)
@@ -288,6 +290,20 @@ class RegistryTest(Base):
         core._publish_board = lambda *a, now: None
         self.assertEqual(core.step(now=T0)["ses"], [])
 
+    def test_stat_starttime_is_field_22_after_last_paren(self):
+        # comm may contain spaces and ")" — split after the LAST ")"
+        rest = ["S"] + [str(i) for i in range(4, 53)]   # fields 3..52
+        line = "4242 (weird ) name) " + " ".join(rest)
+        self.assertEqual(stat_starttime(line), "22")
+        self.assertEqual(stat_starttime("1 (x) S 1 2"), "")
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "Linux /proc")
+    def test_linux_proc_start_matches_this_process(self):
+        with open(f"/proc/{os.getpid()}/stat") as f:
+            want = f.read().rsplit(")", 1)[1].split()[19]
+        self.assertEqual(_proc_start(os.getpid()), want)
+        self.assertTrue(want.isdigit())
+
     def test_transcript_path_sanitizes_cwd(self):
         p = transcript_path({"sessionId": "abc", "cwd": "/Users/x/my.repo"},
                             [self.tmp.name])
@@ -318,6 +334,52 @@ class RegistryTest(Base):
         alive.clear()                                 # process exited
         pkt = core.step(now=T0 + 3 * 86400 + 1)
         self.assertEqual(pkt["ses"], [])
+
+
+# ------------------------------------------------- peers / traffic / jump
+
+class PeersJumpTest(Base):
+    LIVE = {"s-me": {"pid": 100, "name": "me"},
+            "s-fable": {"pid": 200, "name": "WEEKEND-FABLE"}}
+
+    def test_only_other_live_registry_sessions_are_peers(self):
+        s = self.sess([
+            human(T0),
+            peer(T0 + 1, name="WEEKEND-FABLE"),            # live, by name
+            peer(T0 + 2, name="a20e508531e89a57b"),        # worker handback
+            assistant_tool_use(T0 + 3, "SendMessage", "m1",
+                               {"to": "WEEKEND-FABLE [0643dd]"}),
+            assistant_tool_use(T0 + 4, "SendMessage", "m2",
+                               {"to": "a20e508531e89a57b"}),
+            assistant_tool_use(T0 + 5, "SendMessage", "m3",
+                               {"to": "uds:/tmp/cc-socks/200.sock"}),
+            peer(T0 + 6, name="me"),                       # self: never a peer
+        ])
+        s.reg = self.LIVE["s-me"]
+        board = attention.build_board(
+            [s], [derive(s, self.cfg, T0 + 7)], [{}], self.cfg, now=T0 + 7,
+            registry=self.LIVE)
+        c = [c for l in board["lanes"].values() for c in l][0]
+        self.assertEqual(sorted((p["dir"], p["name"]) for p in c["peers"]),
+                         [("in", "WEEKEND-FABLE"), ("out", "WEEKEND-FABLE"),
+                          ("out", "WEEKEND-FABLE")])
+        self.assertEqual(sorted(t["name"] for t in c["traffic"]),
+                         ["a20e508531e89a57b", "a20e508531e89a57b", "me"])
+
+    def test_no_registry_means_no_peer_chips(self):
+        s = self.sess([human(T0), peer(T0 + 1)])
+        peers, traffic = attention.split_traffic(s, None)
+        self.assertEqual((len(peers), len(traffic)), (0, 1))
+
+    def test_jump_only_where_an_adapter_can_act(self):
+        mac = {"focus": {"adapter": "iterm2"}}
+        lin = {"focus": {"adapter": "tmux"}}
+        self.assertTrue(focus.can_act(mac, {"TERM_PROGRAM": "iTerm.app"}))
+        self.assertFalse(focus.can_act(mac, {"TERM_PROGRAM": "Apple_Terminal"}))
+        self.assertTrue(focus.can_act(lin, {"TMUX": "/tmp/tmux-1000/default,1,0"}))
+        self.assertFalse(focus.can_act(lin, {"TERM": "xterm-256color"}))  # Ptyxis
+        self.assertFalse(focus.can_act({"focus": {"adapter": "none"}},
+                                       {"TMUX": "x"}))
 
 
 # -------------------------------------------------------------------- web

@@ -10,7 +10,8 @@ Transcript-directory walking stays as the fallback for machines/versions
 without a registry.
 
 A pid can be reused after a crash left a stale file behind; procStart
-(the process start time as ps prints it) is checked once per pid.
+(the process start stamp, platform-specific: see _proc_start) is
+re-checked every REVALIDATE_S.
 """
 
 import glob
@@ -49,10 +50,30 @@ def _pid_alive(pid):
     return True
 
 
-def _ps_lstart(pid):
-    """Process start time as `ps -o lstart=` prints it ("" if unknown).
-    Same format Claude Code writes to procStart on darwin and linux —
-    which is UTC, so ps must print UTC too (local time never matches)."""
+def stat_starttime(stat_text):
+    """Field 22 (starttime, clock ticks since boot) of a /proc/<pid>/stat
+    line, as a string; "" if unparseable. comm (field 2) is parenthesised
+    and may itself contain spaces or ")", so split after the LAST ")":
+    the remainder starts at field 3, which puts field 22 at index 19."""
+    rest = stat_text[stat_text.rfind(")") + 1:].split()
+    return rest[19] if len(rest) > 19 else ""
+
+
+def _proc_start(pid):
+    """This process's start stamp in the form Claude Code writes to
+    procStart for this platform ("" if unknown):
+
+      linux   /proc/<pid>/stat starttime (clock ticks since boot)
+      darwin  `ps -o lstart=`, printed in UTC (procStart is UTC there;
+              local time never matches)
+    """
+    if sys.platform.startswith("linux"):
+        try:
+            with open(f"/proc/{pid}/stat", "r", encoding="utf-8",
+                      errors="replace") as f:
+                return stat_starttime(f.read())
+        except OSError:
+            return ""
     if sys.platform == "win32":
         return ""
     try:
@@ -69,7 +90,7 @@ class Registry:
     the procStart verdict per (pid, procStart) so ps runs once per
     process, not once per second."""
 
-    def __init__(self, cfg=None, alive=_pid_alive, lstart=_ps_lstart):
+    def __init__(self, cfg=None, alive=_pid_alive, lstart=_proc_start):
         self.dir = registry_dir(cfg)
         self._alive = alive
         self._lstart = lstart

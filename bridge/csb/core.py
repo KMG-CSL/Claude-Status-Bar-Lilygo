@@ -155,6 +155,8 @@ class BridgeCore:
         self.registry = registry
         self.registry_mode = False
         self.board_doc = None       # newest web-board document
+        self._reg_live = None       # newest registry read ({sid: entry})
+        self._jump = {}             # pid -> can a focus adapter act on it
         from . import focus          # local: keeps subprocess/AppleScript
         focus.announce(cfg)          # off the import path of every consumer
 
@@ -256,6 +258,7 @@ class BridgeCore:
         transcript discovery as before."""
         live = self.registry.read() if self.registry is not None else None
         self.registry_mode = live is not None
+        self._reg_live = live
         if live is None:
             return
         bound = set()
@@ -285,11 +288,28 @@ class BridgeCore:
             if path not in bound:
                 s.reg = None
 
+    def _can_jump(self, s):
+        """Per-pid, computed once (reads the process env): can the focus
+        adapter act on this session's terminal?"""
+        from . import focus
+        pid = (s.reg or {}).get("pid") or s.claude_pid
+        if not pid or not focus.enabled(self.cfg):
+            return False
+        if pid not in self._jump:
+            try:
+                self._jump[pid] = focus.can_act(self.cfg, focus.env_of(pid))
+            except Exception:
+                self._jump[pid] = False
+        return self._jump[pid]
+
     def _publish_board(self, live, states, entries, now):
         from . import focus
+        pids = {(s.reg or {}).get("pid") or s.claude_pid for s in live}
+        self._jump = {p: v for p, v in self._jump.items() if p in pids}
         self.board_doc = attention.build_board(
             live, states, entries, self.cfg, now=now,
-            focus=focus.enabled(self.cfg))
+            focus=focus.enabled(self.cfg), registry=self._reg_live,
+            can_jump=self._can_jump)
         if self.hooks is not None:
             self.hooks.feed.publish(self.board_doc)
 
