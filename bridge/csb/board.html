@@ -246,19 +246,22 @@ function row(who, text, cls) {
 // show its last paragraph, cut from the TOP when long, never the bottom.
 const REPLY_COLLAPSED = 280;
 function plain(t) {
-  // code is set aside first so emphasis stripping never touches it
-  // (a * b * c stays intact), then put back without its markers
-  const code = [];
-  const keep = (s) => "\u0000" + (code.push(s) - 1) + "\u0000";
-  return t
-    .replace(/```[^\n`]*\n([\s\S]*?)```/g, (_, c) => keep(c))  // fenced
-    .replace(/```([^`]*)```/g, (_, c) => keep(c))     // one-line ```x```
-    .replace(/`([^`\n]*)`/g, (_, c) => keep(c))       // inline
-    .replace(/(\*\*|__)(.+?)\1/g, "$2")               // bold
-    .replace(/(^|[^\w*])[*_]([^*_\n]+)[*_](?![\w*])/g, "$1$2") // italics
-    .replace(/^#{1,6}\s+/gm, "")                      // headings
-    .replace(/\u0000(\d+)\u0000/g, (_, i) => code[i])
-    .trim();
+  // One left-to-right pass: code (```fenced```, ```one-line```, `inline`)
+  // is kept verbatim minus its markers; only the prose between code spans
+  // gets emphasis stripped. No placeholders, so no collisions.
+  const code = /```(?:[^\n`]*\n)?([\s\S]*?)```|`([^`\n]*)`/g;
+  let out = "", last = 0, m;
+  while ((m = code.exec(t)) !== null) {
+    out += prose(t.slice(last, m.index)) + (m[1] !== undefined ? m[1] : m[2]);
+    last = code.lastIndex;
+  }
+  return (out + prose(t.slice(last))).trim();
+}
+function prose(s) {
+  return s
+    .replace(/(\*\*|__)(.+?)\1/g, "$2")                          // bold
+    .replace(/(^|[^\w*])[*_]([^*_\n]+)[*_](?![\w*])/g, "$1$2")   // italics
+    .replace(/^#{1,6}\s+/gm, "");                                // headings
 }
 function lastPara(t) {
   const paras = plain(t).split(/\n\s*\n/).map(p => p.trim()).filter(Boolean);
