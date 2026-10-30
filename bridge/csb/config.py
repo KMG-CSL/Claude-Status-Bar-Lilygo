@@ -92,6 +92,7 @@ DEFAULT_CONFIG = {
     "hook_fresh_s": 900,             # hook edges trusted while events this recent
     "statusline_ttl_s": 600,         # statusline captures older than this are ignored
     "statusline_dir": "",            # "" = data_dir()/statusline
+    "fleet_file": "",                # "" = data_dir()/fleet.json (csb.board reads it)
     "slots_file": "",                # "" = data_dir()/slots.json (stable slot letters)
     # opt-in chime on a session's transition into wait / done: each value
     # an afplay(mac)/paplay(linux)-able sound path, "" = silent. One sound

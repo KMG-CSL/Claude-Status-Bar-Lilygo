@@ -192,8 +192,25 @@ class BridgeCore:
             session.apply_hook(ev)
         self.usage.add_events(new_usage)
         self._limit_alerts(now)
-        return build_packet(self.sessions, self.cfg, self.usage, now=now,
-                            slots=self.slots, chimer=self.chimer)
+        pkt = build_packet(self.sessions, self.cfg, self.usage, now=now,
+                           slots=self.slots, chimer=self.chimer)
+        self._write_fleet(pkt, now)
+        return pkt
+
+    def _write_fleet(self, pkt, now):
+        """Snapshot the packet to fleet.json for local readers (csb.board,
+        the terminal waiting-on-you row). Atomic (tmp + os.replace) so a
+        reader never sees a torn file; any failure is swallowed — the
+        display path must not depend on it."""
+        path = self.cfg.get("fleet_file") or \
+            os.path.join(data_dir(), "fleet.json")
+        tmp = f"{path}.{os.getpid()}.tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(dict(pkt, ts=now), f, separators=(",", ":"))
+            os.replace(tmp, path)
+        except OSError:
+            pass
 
     def _drain_hooks(self, now):
         """-> [(session, event)] for every queued hook event. Events route

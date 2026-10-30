@@ -159,6 +159,9 @@ def base_cfg(**over):
     # dir does not exist, so the allocator's writes no-op (in-memory)
     cfg["slots_file"] = os.path.join(
         tempfile.gettempdir(), "csb-tests-no-slots", "slots.json")
+    # and the fleet snapshot: missing parent dir -> the write no-ops
+    cfg["fleet_file"] = os.path.join(
+        tempfile.gettempdir(), "csb-tests-no-fleet", "fleet.json")
     cfg.update(over)
     return cfg
 
