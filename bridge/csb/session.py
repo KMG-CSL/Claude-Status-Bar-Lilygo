@@ -109,6 +109,7 @@ class Session:
         # The orchestrator is done but workers are in flight — derive()
         # surfaces it as td="delegating · N agents" on done/idle tiles.
         self.task_ids = {}            # tool_use id -> name
+        self.task_since = {}          # tool_use id -> Stop ts it was moved at
         self.permission_mode = ""     # newest permissionMode seen in the JSONL
         self.limit_reset = 0.0        # unix epoch the rate limit lifts, 0 = none
         self.error = ""               # short API-error reason ("" = none)
@@ -245,6 +246,7 @@ class Session:
                         has_tool_result = True
                         self.pending_ids.pop(b.get("tool_use_id", ""), None)
                         self.task_ids.pop(b.get("tool_use_id", ""), None)
+                        self.task_since.pop(b.get("tool_use_id", ""), None)
                         # structured "limit reached|<epoch>" only: tool
                         # output is agent-visible prose, and "wait N
                         # minutes" in a build log is not a rate limit
@@ -394,6 +396,7 @@ class Session:
             for tid, (tname, _pts, _d) in list(self.pending_ids.items()):
                 if tname in engine.LONG_TOOLS:
                     self.task_ids[tid] = tname
+                    self.task_since.setdefault(tid, ts)
                     del self.pending_ids[tid]
             # classify the ending BEFORE clearing pending ids: a Stop with
             # a still-unmatched tool_use means the turn was cancelled
@@ -455,6 +458,7 @@ class Session:
             self.done_latch = None
             self.pending_ids.clear()
             self.task_ids.clear()
+            self.task_since.clear()
             self.subagents.clear()
             self.turn_started_at = None
             self.turn_stopped_at = None
@@ -471,6 +475,7 @@ class Session:
             self.perm_prompt_at = None
             self.pending_ids.clear()  # nothing left to approve
             self.task_ids.clear()     # the claude process (and its workers) exited
+            self.task_since.clear()
             self.subagents.clear()
 
     def _classify_fin(self, cancel=False):

@@ -38,10 +38,16 @@ def is_settled(session, r, cfg, now):
     whose workers are running is not done yet — no chime, no review."""
     if r.st != "done" or session.subagent_count(cfg, now) > 0:
         return False
-    if session.task_ids:
-        ended = session.turn_stopped_at or session.last_event_ts or 0
-        if now - ended < DELEGATION_GRACE_S:
+    for tid in list(session.task_ids):
+        since = session.task_since.get(tid)
+        if since is None:
+            since = session.task_since[tid] = now
+        if now - since < DELEGATION_GRACE_S:
             return False
+        # no worker alive past its grace: retire it for good, so a later
+        # turn's Stop cannot restart its clock
+        del session.task_ids[tid]
+        del session.task_since[tid]
     return True
 
 

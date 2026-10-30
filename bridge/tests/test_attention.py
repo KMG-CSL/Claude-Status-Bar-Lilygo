@@ -189,6 +189,29 @@ class UnreadLanesTest(Base):
         r = derive(s, self.cfg, T0 + 1 + self.cfg["approval_silence_s"] + 5)
         self.assertEqual(r.st, "wait")
 
+    def test_retired_delegation_does_not_restart_on_next_stop(self):
+        s = self.sess([human(T0), assistant_tool_use(T0 + 1, "Task", "tk")])
+        s.apply_hook(ev("UserPromptSubmit", T0))
+        s.apply_hook(ev("Stop", T0 + 5))
+        late = T0 + 5 + attention.DELEGATION_GRACE_S + 1
+        attention.is_settled(s, derive(s, self.cfg, late), self.cfg, late)
+        self.assertEqual(s.task_ids, {})                 # retired for good
+        s.apply_hook(ev("UserPromptSubmit", late + 1))   # a plain next turn
+        s.apply_hook(ev("Stop", late + 3))
+        r = derive(s, self.cfg, late + 4)
+        self.assertTrue(attention.is_settled(s, r, self.cfg, late + 4))
+
+    def test_busy_with_dialog_up_stays_wait_and_timer_is_continuous(self):
+        s = self.sess([human(T0), assistant_tool_use(T0 + 1, "Bash", "b1")])
+        t = T0 + 1 + self.cfg["approval_silence_s"] + 5
+        s.reg = {"status": "busy", "waitingFor": "permission"}
+        self.assertEqual(derive(s, self.cfg, t).st, "wait")
+        s.reg = {"status": "busy", "waitingFor": None}
+        before = derive(s, self.cfg, t - 10)          # under the threshold
+        after = derive(s, self.cfg, t)
+        self.assertEqual(after.st, "tool")
+        self.assertEqual(after.el - before.el, 10)    # no timer jump
+
     def test_quiet_for_hours_parks_and_keeps_unread(self):
         s, r = self.done_session([human(T0), assistant_text(T0 + 4, "ok")])
         later = T0 + self.cfg["parked_after_s"] + 60
