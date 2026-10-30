@@ -90,6 +90,8 @@ struct Sess {
   bool at;      // needs attention
   int  sl;      // stable slot letter index (falls back to array index)
   char pm[18];  // permissionMode ("", plan, acceptEdits, bypassPermissions)
+  bool lim;     // rate-limited (lim epoch != 0) — a wait that isn't on you
+  bool ur;      // done + unread (bridge "ur", absent = 0 = seen)
 };
 
 #define MAX_SES 8
@@ -97,6 +99,12 @@ Sess ses[MAX_SES];
 int  nSes = 0, act = 0;
 int  nHid = 0;                        // curated-away idle/done sessions
 uint32_t flashUntil[MAX_SES] = {0};   // wait-edge blink deadline per slot
+
+/* attention pulse: actionable waits breathe for as long as they wait;
+ * after 5 min the breath gets quicker and deeper */
+#define PULSE_MS        2000   // calm period
+#define PULSE_MS_LONG   1200   // waiting > PULSE_LONG_S
+#define PULSE_LONG_S    300
 
 struct { int p5 = -1, p7 = -1; char r5[14] = ""; char r7[14] = ""; bool est = true; } usage;
 
@@ -199,6 +207,28 @@ static void printTruncated(const char *s, int x, int baseY, int maxX,
   }
   cv->print(buf);
   cv->print("...");
+}
+
+/* RGB565 mix: t = 0 -> a, 255 -> b */
+static uint16_t blend565(uint16_t a, uint16_t b, uint8_t t) {
+  uint16_t r  = (((a >> 11) & 0x1F) * (255 - t) + ((b >> 11) & 0x1F) * t) / 255;
+  uint16_t g  = (((a >> 5)  & 0x3F) * (255 - t) + ((b >> 5)  & 0x3F) * t) / 255;
+  uint16_t bl = ((a & 0x1F)         * (255 - t) + (b & 0x1F)         * t) / 255;
+  return (r << 11) | (g << 5) | bl;
+}
+
+/* actionable wait: on you, not on a rate limit */
+static bool isPulsing(int i) {
+  return !strcmp(ses[i].st, "wait") && ses[i].at && !ses[i].lim;
+}
+
+/* orange fill dimmed along a cosine breath: calm 100%->60%, long 100%->40% */
+static uint16_t pulseFill(int i, uint32_t now) {
+  bool lng = ses[i].el > PULSE_LONG_S;
+  uint32_t per = lng ? PULSE_MS_LONG : PULSE_MS;
+  float w = 0.5f - 0.5f * cosf(6.2831853f * (float)(now % per) / per);
+  float depth = lng ? 0.60f : 0.40f;
+  return blend565(C_ORANGE, C_BG, (uint8_t)(w * depth * 255));
 }
 
 static uint16_t ctxColor(int pct) {
@@ -328,14 +358,21 @@ static void drawFleetGrid() {
     int cy0 = y0 + (i / cols) * (ch + gap);
     uint16_t fill, fg;
     const char *st = ses[i].st;
+    bool seenDone = false;
     if      (!strcmp(st, "wait")) { fill = C_ORANGE; fg = C_BG; }
-    else if (!strcmp(st, "done")) { fill = C_GREEN;  fg = C_BG; }
+    else if (!strcmp(st, "done") &&
+             ses[i].ur)           { fill = C_GREEN;  fg = C_BG; }
     else if (!strcmp(st, "run") ||
              !strcmp(st, "tool")) { fill = C_PANEL;  fg = C_TEXT; }
-    else                          { fill = C_BAR_BG; fg = C_DIM; }
+    else                          { fill = C_BAR_BG; fg = C_DIM;
+                                    seenDone = !strcmp(st, "done"); }
+    // edge blink first (sharp), then settle into the slow breath
     if (flashUntil[i] > now && blinkOn) { fill = C_TEXT; fg = C_BG; }
+    else if (isPulsing(i))              fill = pulseFill(i, now);
 
     cv->fillRect(cx0, cy0, cw, ch, fill);
+    // seen done reads as idle, plus a quiet green tick on the left edge
+    if (seenDone) cv->fillRect(cx0, cy0, 2, ch, C_GREEN);
     if (i == act) {
       cv->drawRect(cx0, cy0, cw, ch, C_TEXT);
       cv->drawRect(cx0 + 1, cy0 + 1, cw - 2, ch - 2, C_TEXT);
@@ -723,9 +760,6 @@ static void handleLine(const char *line) {
       strlcpy(s.nm, o["nm"] | "",      sizeof(s.nm));
       strlcpy(s.md, o["md"] | "Claude", sizeof(s.md));
       strlcpy(s.st, o["st"] | "idle",  sizeof(s.st));
-      // wait-edge: blink this slot's minimap cell briefly
-      if (hadSt && !wasWait && !strcmp(s.st, "wait"))
-        flashUntil[n] = millis() + 1600;
       strlcpy(s.tl, o["tl"] | "",      sizeof(s.tl));
       strlcpy(s.td, o["td"] | "",      sizeof(s.td));
       strlcpy(s.ef, o["ef"] | "",      sizeof(s.ef));
@@ -736,6 +770,12 @@ static void handleLine(const char *line) {
       s.to = o["to"] | 0L;
       s.cx = o["cx"] | 0;
       s.at = o["at"] | false;
+      s.lim = (o["lim"] | 0LL) != 0;
+      s.ur = (o["ur"] | 0) != 0;
+      // wait-edge: blink this slot's minimap cell briefly (actionable only —
+      // a rate-limit isn't a call to action)
+      if (hadSt && !wasWait && !strcmp(s.st, "wait") && s.at && !s.lim)
+        flashUntil[n] = millis() + 1600;
       s.sl = o["sl"] | n;
       if (s.sl < 0 || s.sl > 25) s.sl = n;
       strlcpy(s.pm, o["pm"] | "", sizeof(s.pm));
@@ -913,7 +953,8 @@ void loop() {
     const char *st = ses[act].st;
     animating = (!strcmp(st, "run") || !strcmp(st, "tool"));
     for (int i = 0; !animating && i < nSes; i++)
-      if (flashUntil[i] > now) animating = true;   // wait-edge blink
+      if (flashUntil[i] > now || isPulsing(i))
+        animating = true;                          // wait blink / breath
   }
   uint32_t interval = animating ? 150 : 500;
   if (dirty || now - lastDraw >= interval) {
