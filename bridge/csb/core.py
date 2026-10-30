@@ -297,8 +297,11 @@ class BridgeCore:
     def _jump_key(self, s):
         reg = s.reg or {}
         pid = reg.get("pid") or s.claude_pid
-        # process identity, not just the pid: a reused pid is a new key
-        return (pid, str(reg.get("procStart") or "")) if pid else None
+        # process identity, not just the pid: a reused pid is a new key.
+        # Without a registry procStart, the session id stands in (a reused
+        # pid running claude is a different session).
+        ident = str(reg.get("procStart") or "") or s.session_id
+        return (pid, ident) if pid else None
 
     def _can_jump(self, s, now=None):
         """Can the focus adapter act on this session's terminal? Answered
