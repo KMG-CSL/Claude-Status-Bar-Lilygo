@@ -78,7 +78,7 @@ fi
 cat > "$CFG" <<EOF
 board_manager:
   additional_urls:
-    - https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+    - https://espressif.github.io/arduino-esp32/package_esp32_index.json
 directories:
   data: $BUILD/data
   downloads: $BUILD/downloads
@@ -137,14 +137,38 @@ fi
 
 # ---------- 3a. CST3530 touch firmware blob (new hw revision) ----------
 # Newer boards (~May 2026 on) have a Hynitron CST3530 touch chip that needs
-# its firmware verified/uploaded by the host. The blob comes from LilyGo's
-# cst3530 branch. Optional: without it, old-revision boards and CST boards
-# with healthy firmware still work.
+# its firmware verified/uploaded by the host. The blob lives on LilyGo's
+# cst3530 branch. Optional for old-revision boards and CST boards with
+# healthy chip firmware -- but a missing blob silently compiles out the
+# re-upload path (touch_drv.h __has_include), so a failed download is fatal
+# unless CSB_SKIP_TOUCH_FW=1. Fetched via the github.com branch zip, not
+# raw.githubusercontent.com, which some corporate proxies (Zscaler) 403.
 if [[ ! -f "$SKETCH/cst3530_fw.h" ]]; then
-    step "Downloading CST3530 touch firmware blob..."
-    curl -fsSL "https://raw.githubusercontent.com/Xinyuan-LilyGO/T-Display-S3-Long/T-Display-S3-Long-cst3530/lib/hyn_driver_for_esp32/hyn_chips/cst3530_fw.h" \
-        -o "$SKETCH/cst3530_fw.h" \
-        || echo "  (download failed - continuing without touch-fw upload support)"
+    step "Downloading CST3530 touch firmware blob (cst3530 branch zip)..."
+    CST_ZIP="$BUILD/cst3530.zip"
+    cst_ok=0
+    if curl -fsSL "https://github.com/Xinyuan-LilyGO/T-Display-S3-Long/archive/refs/heads/T-Display-S3-Long-cst3530.zip" -o "$CST_ZIP"; then
+        if python3 - "$CST_ZIP" "$SKETCH/cst3530_fw.h" <<'PYEOF'
+import sys, zipfile
+with zipfile.ZipFile(sys.argv[1]) as z:
+    names = [n for n in z.namelist() if n.endswith("hyn_chips/cst3530_fw.h")]
+    if not names:
+        sys.exit("cst3530_fw.h not found in branch zip - repo layout may have changed")
+    with z.open(names[0]) as src, open(sys.argv[2], "wb") as dst:
+        dst.write(src.read())
+PYEOF
+        then cst_ok=1; fi
+    fi
+    rm -f "$CST_ZIP"
+    if [[ $cst_ok != 1 ]]; then
+        rm -f "$SKETCH/cst3530_fw.h"
+        [[ "${CSB_SKIP_TOUCH_FW:-}" == 1 ]] || die "CST3530 touch firmware download failed.
+Without cst3530_fw.h, new-revision boards whose touch chip has bad firmware
+get NO TOUCH, and nothing else in the build will warn you. Fix the network
+(github.com must be reachable) or rerun with CSB_SKIP_TOUCH_FW=1 to build
+without touch-fw upload support."
+        echo "  CSB_SKIP_TOUCH_FW=1 - continuing WITHOUT touch-fw upload support"
+    fi
 fi
 
 # ---------- 3b. LVGL (the LilyGo driver #includes it) ----------
