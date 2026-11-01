@@ -5,8 +5,13 @@ consumer of the same engine state the serial link sends, no new process.
     GET  /                 board.html (single file, no build step)
     GET  /api/board        current board document (csb.attention)
     GET  /api/events       text/event-stream: one "board" event per step
-    POST /api/focus        {"sid": ...} -> jump to that terminal, when a
+    POST /api/focus        {"sid"} -> jump to that terminal, when a
                            focus adapter exists (never required)
+    POST /api/mark         {"sid", "op": seen|unseen|snooze|unsnooze|note,
+                            "reply_ts"?, "minutes"?, "text"?} -> csb.marks
+    POST /api/answer       {"sid", "answer": approve|deny} -> keystroke to
+                           the session's terminal, re-checked on the
+                           bridge thread (permission dialog only)
 
 Bound to 127.0.0.1 only (the listener). GETs also check the Host header
 so a DNS-rebinding page can't read the board; the POST additionally
@@ -135,27 +140,64 @@ def _stream(handler, feed):
     handler.close_connection = True
 
 
+POSTS = {"/api/focus": "focus", "/api/mark": "mark", "/api/answer": "answer"}
+MARK_OPS = ("seen", "unseen", "snooze", "unsnooze", "note")
+ANSWERS = ("approve", "deny")
+NOTE_MAX = 200
+SNOOZE_MAX_MIN = 24 * 60
+
+
+def _command(cmd, body):
+    """-> validated command event, or None. Only known fields pass, in
+    their expected types; the bridge thread trusts nothing else."""
+    sid = str(body.get("sid") or "")
+    if not sid:
+        return None
+    ev = {"_cmd": cmd, "sid": sid, "ts": time.time()}
+    if cmd == "mark":
+        op = body.get("op")
+        if op not in MARK_OPS:
+            return None
+        ev["op"] = op
+        if op == "seen" and isinstance(body.get("reply_ts"), (int, float)):
+            ev["reply_ts"] = float(body["reply_ts"])
+        if op == "snooze":
+            mins = body.get("minutes", 30)
+            if not isinstance(mins, (int, float)) or not 1 <= mins <= SNOOZE_MAX_MIN:
+                return None
+            ev["minutes"] = int(mins)
+        if op == "note":
+            ev["text"] = str(body.get("text") or "")[:NOTE_MAX]
+    elif cmd == "answer":
+        if body.get("answer") not in ANSWERS:
+            return None
+        ev["answer"] = body["answer"]
+    return ev
+
+
 def handle_post(handler, enqueue):
     """-> True when the path was ours. `enqueue` puts a command event on
     the bridge's hook queue (executed on the bridge thread)."""
     path = urlparse(handler.path).path
-    if path != "/api/focus":
+    cmd = POSTS.get(path)
+    if cmd is None:
         return False
     ctype = (handler.headers.get("Content-Type") or "").split(";")[0]
     if not (_host_ok(handler) and _origin_ok(handler)
             and ctype.strip().lower() == "application/json"):
         _send(handler, 403, b"forbidden\n")
         return True
+    ev = None
     try:
         n = int(handler.headers.get("Content-Length") or 0)
         body = json.loads(handler.rfile.read(n) or b"{}")
-        sid = str(body.get("sid") or "")
+        if isinstance(body, dict):
+            ev = _command(cmd, body)
     except Exception as e:
-        debug("web", f"bad focus request: {e}")
-        sid = ""
-    if not sid:
-        _send(handler, 400, b"sid required\n")
+        debug("web", f"bad {cmd} request: {e}")
+    if ev is None:
+        _send(handler, 400, b"bad request\n")
         return True
-    enqueue({"_cmd": "focus", "sid": sid, "ts": time.time()})
+    enqueue(ev)
     _send(handler, 202)
     return True

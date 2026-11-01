@@ -10,10 +10,14 @@ Rough priority order. Items graduate to upstream PRs once proven on real hardwar
   quickens (good default). Make the periods and the 5-min threshold
   configurable (pushed in the cf packet), with an "inverse" option: fast
   when the wait is new, slowing over time.
-- **"Done, seen" is rarely populated**: seen = you prompted the session
-  again, so finished sessions sit in Review until you reply or park after
-  4 h. If that's too sticky: click-to-dismiss on the card (~10 lines,
-  POST like /api/focus, a per-session seen-at in the bridge).
+- ~~"Done, seen" is rarely populated~~ — shipped 2026-11-01 as the Seen
+  mark (csb/marks.py). Follow-ups from that round: snooze is board-only
+  (the LCD cell keeps breathing; dropping `at` for a snoozed session is
+  one line in `to_packet` if wanted); Approve/Deny keystrokes verified
+  by unit test only — confirm Enter/Escape against a live permission
+  dialog in iTerm2 and tmux once, then note the Claude Code version here;
+  typed free-text answers from the board (same send path) deferred until
+  Approve has proven itself.
 - **Registry status vocabulary**: only `idle`/`busy` and a null
   `waitingFor` have been observed. The tier treats any non-null
   `waitingFor` (or `status == "waiting"`) as a dialog; confirm the real

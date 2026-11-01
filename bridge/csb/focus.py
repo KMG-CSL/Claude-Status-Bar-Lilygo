@@ -304,16 +304,15 @@ def focus_slot(core, sl, runner=_run):
     return focus_session(core, ses, runner=runner)
 
 
-def focus_session(core, ses, runner=_run):
-    """Focus one Session's terminal (display slot or web board). Logs
-    outcome; False when nothing could be raised."""
+def _resolve(core, ses, runner=_run):
+    """session -> (adapter name, ctx) for the adapter calls, or None with
+    the reason logged. Shared by focus (Jump) and send_key (Approve)."""
     if not enabled(core.cfg):
         announce(core.cfg)
-        return False
+        return None
     if not ses.cwd:
         log("focus", f"{ses.session_id[:8]}: no cwd resolved")
-        return False
-    t0 = time.time()
+        return None
     pids = []
     if ses.claude_pid:
         try:                     # exact binding from hook ppid, if alive
@@ -332,7 +331,7 @@ def focus_session(core, ses, runner=_run):
     if not pids:
         log("focus", f"{ses.project}: no claude process in {ses.cwd} "
             "(or its parents)")
-        return False
+        return None
     pid = pids[-1]
     if len(pids) > 1:
         log("focus", f"{ses.project}: {len(pids)} claude PIDs share this cwd — "
@@ -341,18 +340,100 @@ def focus_session(core, ses, runner=_run):
     tty = tty_of(pid, runner=runner)
     if not tty:
         log("focus", f"{ses.project}: pid {pid} has no tty")
-        return False
+        return None
     name = adapter_for(core.cfg)
+    ctx = {"pid": pid, "tty": tty, "cwd": ses.cwd,
+           "session_id": ses.session_id, "env": env_of(pid, runner=runner)}
+    return name, ctx
+
+
+def focus_session(core, ses, runner=_run):
+    """Focus one Session's terminal (display slot or web board). Logs
+    outcome; False when nothing could be raised."""
+    t0 = time.time()
+    res = _resolve(core, ses, runner=runner)
+    if res is None:
+        return False
+    name, ctx = res
     fn = ADAPTERS.get(name)
     if fn is None:
         log("focus", f"{ses.project}: no adapter named {name!r} "
             f"(have: {', '.join(sorted(ADAPTERS))})")
         return False
-    ctx = {"pid": pid, "tty": tty, "cwd": ses.cwd,
-           "session_id": ses.session_id, "env": env_of(pid, runner=runner)}
     ok, detail = fn(ctx, runner=runner)
-    log("focus", f"{ses.project} via {name} pid={pid} tty={tty} -> "
-        f"{'focused' if ok else 'FAILED'}{': ' + detail if detail else ''} "
+    log("focus", f"{ses.project} via {name} pid={ctx['pid']} tty={ctx['tty']} "
+        f"-> {'focused' if ok else 'FAILED'}{': ' + detail if detail else ''} "
+        f"({int((time.time() - t0) * 1000)}ms)")
+    return ok
+
+
+# ---- send one key (board Approve / Deny) ----
+# Same identity chain as focus, then ONE keystroke typed into that exact
+# tty. The caller (core._answer) has already verified the session is in
+# a permission dialog; this layer only knows how to reach the terminal.
+
+_ITERM_SEND = """
+on run argv
+  set wanted to item 1 of argv
+  set keys to item 2 of argv
+  tell application "iTerm2"
+    repeat with w in windows
+      repeat with t in tabs of w
+        repeat with s in sessions of t
+          if tty of s is wanted then
+            tell s to write text keys newline NO
+            return "ok"
+          end if
+        end repeat
+      end repeat
+    end repeat
+  end tell
+  return "no-session"
+end run
+"""
+
+# tmux key names -> the raw bytes iTerm2's `write text` must type
+_ITERM_KEYS = {"Enter": "\r", "Escape": "\x1b", "Tab": "\t", "Space": " "}
+
+
+def send_iterm2(ctx, key, runner=_run):
+    text = _ITERM_KEYS.get(key, key)
+    r = runner(["osascript", "-e", _ITERM_SEND, ctx["tty"], text], timeout=10)
+    ok = r.returncode == 0 and "ok" in (r.stdout or "")
+    return ok, (r.stdout or r.stderr or "").strip()
+
+
+def send_tmux(ctx, key, runner=_run):
+    """send-keys to the pane that owns the session's tty. Off tmux there
+    is no pane to type into: an honest no, never a window-wide guess."""
+    if not ctx["env"].get("TMUX"):
+        return False, "session is not under tmux"
+    pane = tmux_pane_for(ctx["tty"], runner=runner)
+    if not pane:
+        return False, f"TMUX set but no pane owns {ctx['tty']}"
+    r = runner(["tmux", "send-keys", "-t", pane, key])
+    return r.returncode == 0, (r.stderr or "").strip()
+
+
+SENDERS = {"iterm2": send_iterm2, "tmux": send_tmux}
+
+
+def send_key_session(core, ses, key, runner=_run):
+    """Type `key` (tmux key name: Enter, Escape, ...) into the session's
+    terminal. Logs the outcome; False when it could not be delivered."""
+    t0 = time.time()
+    res = _resolve(core, ses, runner=runner)
+    if res is None:
+        return False
+    name, ctx = res
+    fn = SENDERS.get(name)
+    if fn is None:
+        log("focus", f"{ses.project}: adapter {name!r} cannot send keys")
+        return False
+    ok, detail = fn(ctx, key, runner=runner)
+    log("focus", f"{ses.project} send {key} via {name} pid={ctx['pid']} "
+        f"tty={ctx['tty']} -> {'sent' if ok else 'FAILED'}"
+        f"{': ' + detail if detail else ''} "
         f"({int((time.time() - t0) * 1000)}ms)")
     return ok
 

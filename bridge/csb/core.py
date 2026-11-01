@@ -14,6 +14,7 @@ from .config import data_dir, log
 from .engine import LONG_TOOLS, derive
 from .fmt import fmt_countdown
 from .limits import AlertLog, is_expired
+from .marks import Marks
 from .registry import Registry, project_dir_name, transcript_path
 from .session import Session, find_transcripts
 from .slots import SlotAllocator
@@ -150,6 +151,10 @@ class BridgeCore:
             cfg.get("slots_file") or os.path.join(data_dir(), "slots.json"),
             max(8, cfg.get("max_sessions", 8)))
         self.chimer = Chimer(cfg)
+        # web-board user marks (seen / snooze / note), applied every step
+        self.marks = Marks(cfg.get("marks_file")
+                           or os.path.join(data_dir(), "marks.json"))
+        self._answers = []          # board Approve/Deny, run after the poll
         # Claude Code's live session registry: exact discovery when the
         # machine has one (registry_mode), transcript walking otherwise
         if registry is None and cfg.get("registry_enabled", True):
@@ -248,6 +253,12 @@ class BridgeCore:
         # buffered in the file
         for session, ev in routed:
             session.apply_hook(ev)
+        for s in self.sessions.values():
+            self.marks.apply(s, now)
+        # Approve/Deny run against the freshest state (after poll + edges)
+        for s, ev in self._answers:
+            self._answer(s, ev, now)
+        self._answers = []
         self.usage.add_events(new_usage)
         self._limit_alerts(now)
         pkt = build_packet(
@@ -406,14 +417,65 @@ class BridgeCore:
 
     def _command(self, ev):
         """Board-originated commands, executed on the bridge thread (the
-        HTTP thread only enqueues). Today: focus — jump to a session's
-        terminal where an adapter exists; nothing depends on it working."""
+        HTTP thread only enqueues): focus (jump to a session's terminal
+        where an adapter exists), mark (seen / snooze / note, csb.marks)
+        and answer (Approve / Deny a permission dialog, deferred to after
+        this step's poll so it is checked against fresh state)."""
+        s = None
+        for cand in self.sessions.values():
+            if cand.session_id == ev.get("sid"):
+                s = cand
+                break
+        if s is None:
+            log("board", f"{ev['_cmd']}: unknown session {ev.get('sid', '')[:8]}")
+            return
         if ev["_cmd"] == "focus":
             from . import focus
-            for s in self.sessions.values():
-                if s.session_id == ev.get("sid"):
-                    focus.focus_session(self, s)
-                    return
+            focus.focus_session(self, s)
+        elif ev["_cmd"] == "mark":
+            self._mark(s, ev)
+        elif ev["_cmd"] == "answer":
+            self._answers.append((s, ev))
+
+    def _mark(self, s, ev):
+        op = ev.get("op")
+        now = ev.get("ts") or time.time()
+        sid = s.session_id
+        if op == "seen":
+            # the reply being acknowledged: the client's, else the newest
+            ts = ev.get("reply_ts") or s.last_reply_ts or s.last_event_ts or now
+            self.marks.mark_seen(sid, ts, now)
+        elif op == "unseen":
+            self.marks.unsee(sid, now)
+        elif op == "snooze":
+            self.marks.snooze_until(sid, now + 60 * int(ev.get("minutes") or 30),
+                                    now)
+        elif op == "unsnooze":
+            self.marks.unsnooze(sid, now)
+        elif op == "note":
+            self.marks.set_note(sid, ev.get("text") or "", now)
+        self.marks.apply(s, now)
+        log("board", f"{s.title()[:24]}: {op}")
+
+    def _answer(self, s, ev, now):
+        """Approve / Deny from the board. Re-checked here, at send time:
+        the session must still be in a HOOK-evidenced permission wait (a
+        Notification permission_prompt latch) — not a plan, a question, an
+        error or a rate limit, and not the transcript tier's silence
+        guess — or nothing is typed into its terminal."""
+        from . import focus
+        r = derive(s, self.cfg, now)
+        kind = attention.need_kind(s, r)
+        answer = ev.get("answer")
+        if (r.st != "wait" or r.lim or kind != "permission"
+                or s.perm_prompt_at is None):
+            log("board", f"{s.title()[:24]}: {answer} refused — not in a "
+                f"permission dialog (st={r.st} need={kind} src={r.src})")
+            return False
+        fcfg = self.cfg.get("focus") or {}
+        key = (fcfg.get("approve_key") or "Enter") if answer == "approve" \
+            else (fcfg.get("deny_key") or "Escape")
+        return focus.send_key_session(self, s, key)
 
     def _limit_alerts(self, now):
         """Announce a newly-hit rate limit once per cooldown window; the

@@ -15,7 +15,9 @@ Lanes, in priority order, assigned automatically (no manual curation):
 is newer than the user's last HUMAN prompt (origin.kind, so peer
 messages and task notifications don't count as the user looking). It
 survives bridge restarts because both timestamps come from the
-transcript.
+transcript. The one user-side input is the board's Seen mark
+(csb.marks): a reply acknowledged there counts as seen until a newer
+reply arrives.
 """
 
 import re
@@ -56,7 +58,22 @@ def is_unread(session, r, cfg, now):
     if not is_settled(session, r, cfg, now) or r.fin == "cancel":
         return False              # Escape is the user acting: seen
     reply = session.last_reply_ts or session.last_event_ts or 0
-    return reply > (session.last_prompt_ts or 0)
+    seen = max(session.last_prompt_ts or 0, getattr(session, "seen_ts", 0) or 0)
+    return reply > seen
+
+
+def is_snoozed(session, now):
+    return (getattr(session, "snooze_until", 0) or 0) > now
+
+
+def _newest_pending(session):
+    """The pending_text entry of the newest unresolved tool_use: what the
+    Needs-you card shows in full (command, path, question + options)."""
+    ids = session.pending_ids
+    if not ids:
+        return None
+    tid = max(ids, key=lambda k: ids[k][1])
+    return getattr(session, "pending_text", {}).get(tid)
 
 
 def activity_ts(session):
@@ -120,12 +137,16 @@ def split_traffic(session, live):
         if live is not None:
             if pid:
                 hit = pid in live["pids"] and pid != own_pid
-                shown = live["pids"].get(pid) or bare
+                # registry name, else the board's own title for that pid
+                # (an unnamed session must not surface as a socket path)
+                shown = (live["pids"].get(pid)
+                         or live.get("titles", {}).get(pid) or bare)
             else:
                 hit = bare in live["names"] and bare != own_name
                 shown = bare
+                pid = live.get("by_name", {}).get(bare, 0)
         item = {"dir": d, "name": shown if hit else name, "ts": ts,
-                "gist": gist}
+                "gist": gist, "pid": pid if hit else 0}
         (peers if hit else traffic).append(item)
     return peers, traffic
 
@@ -135,6 +156,10 @@ def card(session, r, entry, lane, cfg, now, live=None, jump=False):
     subs = [{"type": t or "agent", "age": int(now - t0)}
             for t, t0 in session.subagents.values()]
     peers, traffic = split_traffic(session, live)
+    pend = _newest_pending(session) if lane == "needs" else None
+    todos = getattr(session, "todos", [])
+    done_n = sum(1 for _c, st in todos if st == "completed")
+    seen_ts = getattr(session, "seen_ts", 0) or 0
     return {
         "sid": session.session_id,
         "slot": entry.get("sl"),
@@ -172,11 +197,28 @@ def card(session, r, entry, lane, cfg, now, live=None, jump=False):
         "jump": bool(jump),
         "kind": reg.get("kind") or "",
         "started": (reg.get("startedAt") or 0) / 1000.0,
+        # detail (drawer) facts and user marks
+        "branch": getattr(session, "git_branch", ""),
+        "files": list(getattr(session, "turn_files", [])),
+        "todos": [{"c": c, "s": st} for c, st in todos],
+        "progress": f"{done_n}/{len(todos)}" if todos else "",
+        "exchanges": [{"who": w, "ts": t, "text": x}
+                      for w, t, x in getattr(session, "exchanges", [])],
+        "pending": pend["text"] if pend else "",
+        "pending_tool": pend["tool"] if pend else "",
+        "options": list(pend["options"]) if pend else [],
+        "snooze": int(session.snooze_until) if (
+            lane == "needs" and is_snoozed(session, now)) else 0,
+        "note": getattr(session, "note", ""),
+        "seen_ts": seen_ts,
+        # acked: the user marked THIS reply seen (so Done offers "unread")
+        "acked": bool(seen_ts and session.last_reply_ts
+                      and seen_ts >= session.last_reply_ts),
     }
 
 
 _SORT = {
-    "needs": lambda c: -c["el"],                  # longest waiting first
+    "needs": lambda c: (1 if c.get("snooze") else 0, -c["el"]),  # snoozed last
     "limited": lambda c: c["lim"],                # soonest reset first
     "review": lambda c: -(c["reply_ts"] or 0),    # newest finish first
     "running": lambda c: -c["el"],
@@ -200,6 +242,13 @@ def build_board(live, states, entries, cfg, now=None, focus=False,
                      if isinstance(e.get("pid"), int)},
             "names": {str(e.get("name")) for e in registry.values()
                       if e.get("name")},
+            "by_name": {str(e.get("name")): e["pid"]
+                        for e in registry.values()
+                        if e.get("name") and isinstance(e.get("pid"), int)},
+            # the board's own titles by pid: the chip for an unnamed
+            # peer reads like its card, never like a socket path
+            "titles": {(s.reg or {}).get("pid"): s.title()
+                       for s in live if (s.reg or {}).get("pid")},
         }
     if now is None:
         now = time.time()
@@ -210,10 +259,15 @@ def build_board(live, states, entries, cfg, now=None, focus=False,
                               jump=bool(can_jump and can_jump(s))))
     for k in LANES:
         lanes[k].sort(key=_SORT[k])
+    counts = {k: len(v) for k, v in lanes.items()}
+    # a snoozed Needs-you stays in its lane (and on the LCD) but is out
+    # of the headline count, the tab title and the favicon
+    counts["snoozed"] = sum(1 for c in lanes["needs"] if c["snooze"])
+    counts["needs"] -= counts["snoozed"]
     return {
         "ts": now,
         "host": socket.gethostname().split(".")[0],
         "focus": bool(focus),
         "lanes": lanes,
-        "counts": {k: len(v) for k, v in lanes.items()},
+        "counts": counts,
     }

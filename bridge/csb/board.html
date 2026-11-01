@@ -10,22 +10,31 @@
     --bg: #f6f5f2; --panel: #ffffff; --text: #1f1f1d; --dim: #77756f;
     --line: #e4e1da; --orange: #cb6a44; --orange-bg: #fbeee8;
     --green: #2f9e5f; --green-bg: #e9f6ee; --blue: #3b6fb6; --yellow: #b8860b;
-    --red: #c2413a; --chip: #f0eee9;
+    --red: #c2413a; --chip: #f0eee9; --focus: #1f1f1d;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    /* project hues: muted, none of them a lane colour (lane colour owns
+       the slot square, the borders and the state line) */
+    --p0: #3f8f88; --p1: #8a5b9e; --p2: #9a6a52; --p3: #6a7a9c;
+    --p4: #7f8a4a; --p5: #a05c7a; --p6: #5c8a9e; --p7: #8c7a4a;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #141517; --panel: #1d1f22; --text: #e8e6e1; --dim: #8d8a84;
       --line: #2c2e32; --orange: #e0835d; --orange-bg: #33231c;
       --green: #4cc47e; --green-bg: #18291f; --blue: #79a6e6; --yellow: #e0b54a;
-      --red: #ef6f66; --chip: #2a2c30;
+      --red: #ef6f66; --chip: #2a2c30; --focus: #e8e6e1;
+      --p0: #5fb3ab; --p1: #b088c4; --p2: #c4907a; --p3: #93a3c7;
+      --p4: #a6b26e; --p5: #c784a2; --p6: #82b1c7; --p7: #b5a16b;
     }
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text);
          font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter,
                Ubuntu, sans-serif; }
+  button { font: inherit; }
+  button:focus-visible, .pchip:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
   header { display: flex; align-items: baseline; gap: 14px;
-           padding: 14px 20px 6px; }
+           padding: 14px 20px 4px; flex-wrap: wrap; }
   header h1 { font-size: 17px; margin: 0; font-weight: 600; }
   header .sum { color: var(--dim); }
   header .sum b { color: var(--orange); }
@@ -33,22 +42,61 @@
              border-radius: 8px; background: var(--chip); color: var(--dim); }
   body.off #offline { display: block; }
   body.off main { opacity: .45; }
+
+  /* ---- filter bar ---- */
+  .bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+         padding: 4px 20px 6px; }
+  .bar .lbl { color: var(--dim); font-size: 12px; text-transform: uppercase;
+              letter-spacing: .06em; font-weight: 600; margin-right: 2px; }
+  .pchip { display: inline-flex; align-items: center; gap: 7px;
+           background: var(--panel); border: 1px solid var(--line);
+           border-radius: 999px; padding: 3px 11px 3px 8px; cursor: pointer;
+           color: var(--text); user-select: none; }
+  .pchip .sw { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+  .pchip .n { color: var(--dim); font-size: 12px; }
+  .pchip.on { border-color: var(--text); background: var(--chip); }
+  .pchip.tag { border-style: dashed; }
+  .sep { width: 1px; height: 18px; background: var(--line); margin: 0 4px; }
+  .guard { display: inline-flex; align-items: center; gap: 6px;
+           border-radius: 999px; padding: 3px 11px; cursor: pointer;
+           background: var(--orange); color: #fff; border: 0; font-weight: 600;
+           animation: breathe 2.2s ease-in-out infinite; }
+  .guard.review { background: var(--green); animation: none; }
+  .show { margin-left: auto; display: flex; gap: 10px; align-items: center;
+          color: var(--dim); font-size: 12px; }
+  .show label { display: inline-flex; gap: 4px; align-items: center; cursor: pointer; }
+
   main { padding: 4px 20px 30px; }
   /* wide screens: lanes side by side (kanban); empty and collapsed lanes
      shrink to a header so the live ones get the room. Narrow: stacked. */
   @media (min-width: 1000px) {
     main { display: flex; flex-wrap: wrap; gap: 14px;
            align-items: flex-start; }
+    body.drawer main { padding-right: 452px; }
     .lane { flex: 1 1 0; min-width: 260px; margin-top: 6px; }
     .lane.empty, .lane.collapsed { flex: 0 0 auto; min-width: 0;
-                                   width: 118px; }
+                                   width: auto; padding-right: 8px; }
+    .lane.empty > h2, .lane.collapsed > h2 { white-space: nowrap; }
     .lane .cards { grid-template-columns: 1fr; }
+    #drawer { display: none; position: fixed; top: 0; right: 0; bottom: 0;
+              width: 432px; background: var(--panel); border-left: 1px solid var(--line);
+              overflow-y: auto; padding: 14px 16px 30px; z-index: 6; }
+    body.drawer #drawer { display: block; }
+    .card.open .row { -webkit-line-clamp: 2; }   /* expand lives in the drawer */
+  }
+  @media (max-width: 999px) {
+    #drawer { display: none; }
+    .card.open .row { -webkit-line-clamp: unset; }
   }
   .lane { margin: 10px 0 4px; }
   .lane > h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
                color: var(--dim); margin: 0 0 6px; font-weight: 600;
-               cursor: pointer; user-select: none; }
-  .lane > h2 .n { font-weight: 400; margin-left: 4px; }
+               cursor: pointer; user-select: none; display: flex;
+               align-items: center; gap: 4px; }
+  .lane > h2 .n { font-weight: 400; }
+  .lane > h2 .allseen { margin-left: auto; font-size: 11px; text-transform: none;
+                        letter-spacing: 0; background: none; border: 0;
+                        color: var(--green); cursor: pointer; padding: 0; }
   .lane.empty > h2 { opacity: .5; }
   .lane.collapsed .cards { display: none; }
   .lane.collapsed > h2::after { content: " ▸"; }
@@ -56,28 +104,46 @@
   .cards { display: grid; gap: 10px;
            grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); }
   .card { background: var(--panel); border: 1px solid var(--line);
-          border-radius: 10px; padding: 10px 12px; min-width: 0; }
+          border-radius: 10px; padding: 10px 12px; min-width: 0;
+          position: relative; cursor: pointer; }
   .card.needs { border-color: var(--orange); background: var(--orange-bg);
                 animation: breathe 2.2s ease-in-out infinite; }
   .card.needs.long { animation-duration: 1.2s; }
+  .card.needs.snoozed { animation: none; border-color: var(--line);
+                        background: var(--panel); opacity: .8; }
   .card.review { border-left: 4px solid var(--green); }
   .card.parked, .card.done { opacity: .82; }
+  .card.sel { box-shadow: 0 0 0 2px var(--focus); }
+  .card.linked { box-shadow: 0 0 0 2px var(--dim); }
   @keyframes breathe {
     0%, 100% { box-shadow: 0 0 0 0 transparent; }
     50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--orange) 35%, transparent); }
   }
-  @media (prefers-reduced-motion: reduce) { .card.needs { animation: none; } }
+  @media (prefers-reduced-motion: reduce) { .card.needs, .guard { animation: none; } }
   .top { display: flex; align-items: center; gap: 8px; min-width: 0; }
   .slot { flex: none; width: 22px; height: 22px; border-radius: 6px;
           display: grid; place-items: center; font-weight: 700; font-size: 12px;
           background: var(--chip); color: var(--dim); }
-  .needs .slot { background: var(--orange); color: #fff; }
+  .needs:not(.snoozed) .slot { background: var(--orange); color: #fff; }
   .review .slot { background: var(--green); color: #fff; }
+  .slot.needs { background: var(--orange); color: #fff; }
+  .slot.review { background: var(--green); color: #fff; }
   .title { font-weight: 600; white-space: nowrap; overflow: hidden;
-           text-overflow: ellipsis; }
-  .meta { margin-left: auto; flex: none; color: var(--dim); font-size: 12px; }
+           text-overflow: ellipsis; flex: 1 1 auto; min-width: 70px; }
+  .meta { margin-left: auto; flex: 0 1 auto; color: var(--dim); font-size: 12px;
+          display: inline-flex; align-items: center; gap: 5px; white-space: nowrap;
+          overflow: hidden; }
+  .meta .sw { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+  .meta .pj { max-width: 150px; overflow: hidden; text-overflow: ellipsis; }
+  .meta .br { font-family: var(--mono); font-size: 11px; max-width: 120px;
+              overflow: hidden; text-overflow: ellipsis; }
+  .note { margin-top: 3px; font-size: 12px; color: var(--dim); font-style: italic;
+          overflow-wrap: anywhere; }
+  .note .tag { font-style: normal; color: var(--text); background: var(--chip);
+               border-radius: 4px; padding: 0 5px; }
   .state { margin: 6px 0 2px; font-weight: 600; font-size: 13px; }
   .state.needs { color: var(--orange); }
+  .snoozed .state.needs { color: var(--dim); }
   .state.limited { color: var(--yellow); }
   .state.review { color: var(--green); }
   .state.running { color: var(--blue); }
@@ -86,24 +152,92 @@
          display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden;
          -webkit-line-clamp: 2; overflow-wrap: anywhere; }
   .row.reply { display: block; -webkit-line-clamp: unset; }
-  .card.open .row { -webkit-line-clamp: unset; }
   .row .who { color: var(--dim); font-weight: 600; margin-right: 4px; }
+  .row .prog { color: var(--dim); margin-left: 4px; }
+  pre.perm { margin: 6px 0 0; padding: 6px 8px; background: var(--chip);
+             border-radius: 6px; font: 12px/1.4 var(--mono); white-space: pre-wrap;
+             overflow-wrap: anywhere; max-height: 4.4em; overflow: hidden; }
+  #drawer pre.perm { max-height: none; }
+  .opts { margin-top: 5px; font-size: 13px; display: flex; gap: 8px; flex-wrap: wrap; }
+  .opts span { background: var(--chip); border-radius: 6px; padding: 1px 7px; }
+  .opts span b { color: var(--dim); font-weight: 600; margin-right: 3px; }
+  .files { margin-top: 5px; font-size: 12px; color: var(--dim);
+           font-family: var(--mono); overflow-wrap: anywhere; }
   .chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
   .chip { background: var(--chip); color: var(--dim); border-radius: 999px;
           padding: 1px 8px; font-size: 12px; white-space: nowrap;
-          max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
-  .chip.peer-in::before { content: "← "; }
-  .chip.peer-out::before { content: "→ "; }
+          max-width: 100%; overflow: hidden; text-overflow: ellipsis;
+          display: inline-flex; align-items: center; gap: 5px; border: 0; }
   .chip.sub-in::before { content: "↩ "; }
   .chip.sub-out::before { content: "↪ "; }
-  .chip.sub-in, .chip.sub-out { border: 1px dashed var(--line); }
-  .foot { display: flex; gap: 10px; margin-top: 8px; color: var(--dim);
-          font-size: 12px; align-items: center; }
-  .foot button { margin-left: auto; font: inherit; color: var(--text);
-                 background: var(--chip); border: 1px solid var(--line);
-                 border-radius: 6px; padding: 2px 9px; cursor: pointer; }
+  .chip.sub-in, .chip.sub-out { border: 1px dashed var(--line); background: transparent; }
+  .chip.peer { cursor: pointer; color: var(--text); }
+  .chip.peer:hover { background: var(--line); }
+  .chip .ms { width: 14px; height: 14px; border-radius: 4px; font-size: 10px;
+              font-weight: 700; display: grid; place-items: center;
+              color: #fff; background: var(--dim); }
+  .chip .ms.needs { background: var(--orange); }
+  .chip .ms.review { background: var(--green); }
+  .chip .ms.running { background: var(--blue); }
+  .popwrap { position: relative; height: 0; }
+  .pop { position: absolute; left: 0; right: 0; z-index: 5; margin-top: 6px;
+         background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+         padding: 8px 10px; box-shadow: 0 6px 20px rgba(0,0,0,.15); font-size: 12px;
+         cursor: default; }
+  .pop .m { display: flex; gap: 8px; margin: 3px 0; overflow-wrap: anywhere; }
+  .pop .m .d { color: var(--dim); flex: none; width: 56px; }
+  .pop .acts { display: flex; gap: 8px; margin-top: 6px; }
+  .foot { display: flex; gap: 6px; margin-top: 8px; color: var(--dim);
+          font-size: 12px; align-items: center; flex-wrap: wrap; }
+  .foot .sp { flex: 1; }
+  .foot button, .pop button, .dact button {
+    color: var(--text); background: var(--chip); border: 1px solid var(--line);
+    border-radius: 6px; padding: 2px 9px; cursor: pointer; }
+  button.seen:hover { border-color: var(--green); color: var(--green); }
+  button.ok { border-color: var(--green) !important; color: var(--green) !important; }
+  button.no { border-color: var(--red) !important; color: var(--red) !important; }
   .unread-dot { width: 7px; height: 7px; border-radius: 50%;
                 background: var(--green); flex: none; }
+  .toast { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%);
+           background: var(--text); color: var(--bg); padding: 8px 14px;
+           border-radius: 8px; display: none; gap: 12px; align-items: center;
+           font-size: 13px; z-index: 10; max-width: 80vw; }
+  .toast.on { display: inline-flex; }
+  .toast button { background: none; border: 0; color: inherit;
+                  text-decoration: underline; cursor: pointer; padding: 0; }
+
+  /* ---- drawer ---- */
+  #drawer h3 { margin: 0; font-size: 15px; font-weight: 600; display: flex;
+               align-items: center; gap: 8px; }
+  #drawer .close { margin-left: auto; background: none; border: 0; color: var(--dim);
+                   font-size: 18px; cursor: pointer; }
+  #drawer .dmeta { color: var(--dim); font-size: 12px; margin-top: 4px;
+                   display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  #drawer .dact { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0; }
+  #drawer section { margin-top: 12px; }
+  #drawer section > h4 { margin: 0 0 4px; font-size: 11px; text-transform: uppercase;
+                         letter-spacing: .06em; color: var(--dim); cursor: pointer;
+                         user-select: none; }
+  #drawer section.closed > h4::after { content: " ▸"; }
+  #drawer section.closed > *:not(h4) { display: none; }
+  #drawer .noteedit { width: 100%; font: inherit; font-size: 13px; padding: 5px 8px;
+                      border: 1px solid var(--line); border-radius: 6px;
+                      background: var(--bg); color: var(--text); }
+  #drawer ul.todos { list-style: none; margin: 0; padding: 0; font-size: 13px; }
+  #drawer ul.todos li { padding: 2px 0; display: flex; gap: 6px; }
+  #drawer ul.todos li .mk { flex: none; width: 14px; color: var(--dim); }
+  #drawer ul.todos li.completed { color: var(--dim); text-decoration: line-through; }
+  #drawer ul.todos li.in_progress .mk { color: var(--blue); }
+  #drawer .ex { margin: 6px 0; font-size: 13px; overflow-wrap: anywhere; }
+  #drawer .ex .who { color: var(--dim); font-weight: 600; margin-right: 4px; }
+  #drawer .ex .when { color: var(--dim); font-size: 11px; margin-left: 4px; }
+  #drawer .full { font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere;
+                  max-height: 40vh; overflow: auto; }
+  #drawer .peerline { font-size: 12px; margin: 3px 0; overflow-wrap: anywhere; }
+  #drawer .peerline .d { color: var(--dim); margin-right: 6px; }
+  #drawer .kbd { color: var(--dim); font-size: 11px; margin-top: 16px; }
+  #drawer kbd { font-family: var(--mono); background: var(--chip);
+                border-radius: 4px; padding: 0 5px; }
 </style>
 </head>
 <body>
@@ -112,7 +246,10 @@
   <span class="sum" id="sum"></span>
 </header>
 <div id="offline">Bridge offline: reconnecting. Showing the last known state.</div>
+<div class="bar" id="bar"></div>
 <main id="main"></main>
+<aside id="drawer"></aside>
+<div class="toast" id="toast"><span id="toastmsg"></span><button id="undo">Undo (z)</button></div>
 
 <script>
 "use strict";
@@ -122,13 +259,57 @@ const LANES = [
   ["review", "Ready for review"], ["running", "Running"],
   ["done", "Done, seen"], ["parked", "Parked"],
 ];
-const COLLAPSED = new Set(JSON.parse(
-  localStorage.getItem("csb-collapsed") || '["done","parked"]'));
 const NEED = { permission: "Needs approval", plan: "Plan to approve",
                question: "Asked you a question", error: "Error" };
+const SNOOZE_MIN = 30;
+
+// ---- persisted preferences (display only; filters live in the URL) ----
+function stored(key, fallback) {
+  try { const v = JSON.parse(localStorage.getItem(key)); return v == null ? fallback : v; }
+  catch (e) { return fallback; }
+}
+function store(key, v) { try { localStorage.setItem(key, JSON.stringify(v)); } catch (e) {} }
+// Done used to start collapsed (it was rarely populated); now that Seen
+// fills it, only Parked does. Migrate a tab still holding the old default.
+let collapsedPref = stored("csb-collapsed", ["parked"]);
+if (JSON.stringify(collapsedPref) === '["done","parked"]') collapsedPref = ["parked"];
+const COLLAPSED = new Set(collapsedPref);
+const HUES = stored("csb-hues", {});           // project -> palette index
+const SHOW = Object.assign({ branch: true, files: true, note: true },
+                           stored("csb-show", {}));
+const DCLOSED = new Set(stored("csb-drawer-closed", []));
+
+// ---- filters: the URL is the source of truth (?p=a,b&t=x) ----
+function readFilters() {
+  const q = new URLSearchParams(location.search);
+  const split = s => (s || "").split(",").map(x => x.trim()).filter(Boolean);
+  return { p: new Set(split(q.get("p"))), t: new Set(split(q.get("t"))) };
+}
+let F = readFilters();
+function writeFilters() {
+  const q = new URLSearchParams();
+  if (F.p.size) q.set("p", [...F.p].join(","));
+  if (F.t.size) q.set("t", [...F.t].join(","));
+  const s = q.toString();
+  history.replaceState(null, "", location.pathname + (s ? "?" + s : ""));
+}
+window.addEventListener("popstate", () => { F = readFilters(); render(); });
 
 let doc = null, skew = 0, lastMsg = 0;
-const open = new Set();          // expanded cards, by session id
+const open = new Set();      // narrow-screen expanded cards, by session id
+const st = { sel: null, pin: null, local: {}, undo: [], toastTimer: 0,
+             pressing: false, deferred: false, lastRender: 0 };
+// A click needs mousedown and mouseup on the SAME element; a DOM rebuild
+// in between swallows it. So no render while a pointer is down.
+document.addEventListener("pointerdown", () => { st.pressing = true; }, true);
+const released = () => {
+  st.pressing = false;
+  // pointerup fires BEFORE mouseup/click: rendering here would still
+  // replace the button under the click. Let the click land first.
+  if (st.deferred) { st.deferred = false; setTimeout(render, 60); }
+};
+document.addEventListener("pointerup", released, true);
+document.addEventListener("pointercancel", released, true);
 
 function ago(ts) {
   if (!ts) return "";
@@ -152,6 +333,101 @@ function el(tag, cls, text) {
 }
 // seconds since the doc was built, so timers tick between events
 function live() { return Math.max(0, Date.now() / 1000 - skew - doc.ts); }
+function nowTs() { return Date.now() / 1000 - skew; }
+const letter = c => c.slot == null ? "·" : String.fromCharCode(65 + c.slot);
+
+// ---- cards with local (optimistic) overrides applied ----
+function allCards() {
+  const out = [];
+  for (const [key] of LANES) for (const c of (doc.lanes[key] || [])) {
+    const o = st.local[c.sid];
+    out.push(o ? Object.assign({}, c, o.patch) : c);
+  }
+  return out;
+}
+function tagsOf(c) {
+  return [...(c.note || "").matchAll(/#([\w-]+)/g)].map(m => m[1]);
+}
+function visible(c) {
+  if (F.p.size && !F.p.has(c.project)) return false;
+  if (F.t.size && !tagsOf(c).some(t => F.t.has(t))) return false;
+  return true;
+}
+const activeNeeds = c => c.lane === "needs" && !c.snooze;
+
+function hueIdx(p) {
+  if (HUES[p] != null) return HUES[p];
+  let h = 0;
+  for (const ch of p) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return h % 8;
+}
+const hue = p => `var(--p${hueIdx(p) % 8})`;
+
+// ---- filter bar ----
+function renderBar(cards) {
+  const bar = document.getElementById("bar");
+  bar.replaceChildren();
+  const projects = [...new Set(cards.map(c => c.project).filter(Boolean))].sort();
+  bar.append(el("span", "lbl", "Projects"));
+  const all = el("button", "pchip all" + (F.p.size || F.t.size ? "" : " on"), "All");
+  all.onclick = () => { F.p.clear(); F.t.clear(); writeFilters(); render(); };
+  bar.append(all);
+  for (const p of projects) {
+    const n = cards.filter(c => c.project === p).length;
+    const b = el("button", "pchip" + (F.p.has(p) ? " on" : ""));
+    const sw = el("span", "sw"); sw.style.background = hue(p);
+    sw.title = "Change colour";
+    sw.onclick = (ev) => { ev.stopPropagation(); HUES[p] = (hueIdx(p) + 1) % 8;
+                           store("csb-hues", HUES); render(); };
+    b.append(sw, document.createTextNode(p), el("span", "n", String(n)));
+    b.onclick = (ev) => {
+      if (ev.shiftKey) { F.p.has(p) ? F.p.delete(p) : F.p.add(p); }
+      else if (F.p.size === 1 && F.p.has(p)) F.p.clear();
+      else { F.p.clear(); F.p.add(p); }
+      writeFilters(); render();
+    };
+    bar.append(b);
+  }
+  const tags = [...new Set(cards.flatMap(tagsOf))].sort();
+  for (const t of F.t) if (!tags.includes(t)) tags.push(t);
+  if (tags.length) {
+    bar.append(el("span", "sep"), el("span", "lbl", "Tags"));
+    for (const t of tags) {
+      const n = cards.filter(c => tagsOf(c).includes(t)).length;
+      const b = el("button", "pchip tag" + (F.t.has(t) ? " on" : ""));
+      b.append(document.createTextNode("#" + t), el("span", "n", String(n)));
+      b.onclick = () => { F.t.has(t) ? F.t.delete(t) : F.t.add(t); writeFilters(); render(); };
+      bar.append(b);
+    }
+  }
+  // the guard: hidden attention never goes silent
+  const hiddenNeeds = cards.filter(c => activeNeeds(c) && !visible(c));
+  const hiddenReview = cards.filter(c => c.lane === "review" && !visible(c));
+  const reveal = list => () => {
+    F.t.clear(); list.forEach(c => F.p.add(c.project)); writeFilters(); render();
+  };
+  if (hiddenNeeds.length) {
+    const where = [...new Set(hiddenNeeds.map(c => c.project))].join(", ");
+    const g = el("button", "guard", `+${hiddenNeeds.length} need${hiddenNeeds.length === 1 ? "s" : ""} you in ${where}`);
+    g.title = "Show them";
+    g.onclick = reveal(hiddenNeeds);
+    bar.append(g);
+  } else if (hiddenReview.length) {
+    const g = el("button", "guard review", `+${hiddenReview.length} to review elsewhere`);
+    g.onclick = reveal(hiddenReview);
+    bar.append(g);
+  }
+  const show = el("span", "show");
+  show.append(el("span", "lbl", "Show"));
+  for (const k of ["branch", "files", "note"]) {
+    const l = el("label");
+    const cb = el("input"); cb.type = "checkbox"; cb.id = "show-" + k; cb.checked = SHOW[k];
+    cb.onchange = () => { SHOW[k] = cb.checked; store("csb-show", SHOW); render(); };
+    l.append(cb, document.createTextNode(k));
+    show.append(l);
+  }
+  bar.append(show);
+}
 
 function stateLine(c) {
   const t = c.el + live();
@@ -159,9 +435,10 @@ function stateLine(c) {
     case "needs":
       return (NEED[c.need] || "Needs you") +
         (c.tool && c.need !== "question" ? ": " + c.tool : "") +
-        (c.detail ? " · " + c.detail : "") + " · waiting " + dur(t);
+        (c.detail && !c.pending ? " · " + c.detail : "") +
+        (c.snooze ? " · snoozed " + dur(c.snooze - nowTs()) : " · waiting " + dur(t));
     case "limited": return "Rate-limited" +
-        (c.lim ? " · resets in " + dur(c.lim - Date.now() / 1000 + skew) : "");
+        (c.lim ? " · resets in " + dur(c.lim - nowTs()) : "");
     case "review": return "Finished " + ago(c.reply_ts || c.activity) +
         (c.fin === "fail" ? " · failed" : "") + " · not read yet";
     case "running":
@@ -171,30 +448,129 @@ function stateLine(c) {
         " · " + dur(t);
     case "parked": return "Parked · quiet " + ago(c.activity).replace(" ago", "") +
         (c.unread ? " · unread" : "");
-    default: return "Done " + ago(c.activity) +
+    default: return (c.acked ? "Seen " + ago(c.seen_ts || c.activity)
+                             : "Done " + ago(c.activity)) +
         (c.fin && c.fin !== "ok" ? " · " + c.fin : "");
   }
 }
 
-function card(c, isOpen) {
+// ---- peers: aggregate per peer session, resolve to the card on the board ----
+function peerGroups(c, byPid, byName) {
+  const groups = new Map();
+  for (const p of c.peers || []) {
+    const key = p.pid ? "p" + p.pid : "n" + p.name;
+    let g = groups.get(key);
+    if (!g) {
+      const target = (p.pid && byPid.get(p.pid)) || byName.get(p.name) || null;
+      g = { key, name: p.name, target, n: 0, dirs: new Set(), ts: 0, msgs: [] };
+      groups.set(key, g);
+    }
+    g.n++; g.dirs.add(p.dir); g.ts = Math.max(g.ts, p.ts); g.msgs.push(p);
+  }
+  return [...groups.values()].sort((a, b) => b.ts - a.ts);
+}
+function peerChip(c, g) {
+  const ch = el("button", "chip peer");
+  const glyph = g.dirs.size > 1 ? "⇄" : g.dirs.has("out") ? "→" : "←";
+  ch.append(document.createTextNode(glyph));
+  if (g.target) ch.append(el("span", "ms " + g.target.lane, letter(g.target)));
+  ch.append(document.createTextNode((g.target ? g.target.title : g.name) +
+    (g.n > 1 ? " · " + g.n : "") + " · " + ago(g.ts).replace(" ago", "")));
+  ch.title = g.msgs[0].gist || "";
+  ch.onclick = (ev) => {
+    ev.stopPropagation();
+    st.pin = st.pin && st.pin.from === c.sid && st.pin.key === g.key ? null
+      : { from: c.sid, key: g.key };
+    render();
+  };
+  return ch;
+}
+function popover(c, g) {
+  const wrap = el("div", "popwrap");
+  const pop = el("div", "pop");
+  pop.onclick = ev => ev.stopPropagation();
+  pop.append(el("div", "", `${letter(c)} ${glyphOf(g)} ${g.target ? letter(g.target) + " " : ""}${g.target ? g.target.title : g.name}`));
+  for (const p of g.msgs.slice(0, 3)) {
+    const m = el("div", "m");
+    m.append(el("span", "d", (p.dir === "out" ? "→ " : "← ") + ago(p.ts).replace(" ago", "")),
+             el("span", "", p.gist || "(no text)"));
+    pop.append(m);
+  }
+  const acts = el("div", "acts");
+  if (g.target) {
+    const o = el("button", "", "Open " + letter(g.target));
+    o.onclick = () => { st.sel = g.target.sid; st.pin = null; render(); };
+    acts.append(o);
+    if (g.target.jump) {
+      const j = el("button", "", "Jump to " + letter(g.target));
+      j.onclick = () => jump(g.target);
+      acts.append(j);
+    }
+  }
+  const cl = el("button", "", "Close");
+  cl.onclick = () => { st.pin = null; render(); };
+  acts.append(cl);
+  pop.append(acts);
+  wrap.append(pop);
+  return wrap;
+}
+const glyphOf = g => g.dirs.size > 1 ? "⇄" : g.dirs.has("out") ? "→" : "←";
+
+function noteLine(c) {
+  const n = el("div", "note");
+  for (const part of c.note.split(/(#[\w-]+)/)) {
+    if (part.startsWith("#")) n.append(el("span", "tag", part));
+    else if (part) n.append(document.createTextNode(part));
+  }
+  return n;
+}
+
+function card(c, maps) {
+  const isOpen = open.has(c.sid) && !wide();   // wide screens expand in the drawer
+  const linked = maps.linked === c.sid && st.pin.from !== c.sid;
   const d = el("div", "card " + c.lane +
-    (c.lane === "needs" && c.el + live() > 300 ? " long" : "") +
-    (isOpen ? " open" : ""));
+    (c.lane === "needs" && !c.snooze && c.el + live() > 300 ? " long" : "") +
+    (c.snooze ? " snoozed" : "") + (isOpen ? " open" : "") +
+    (st.sel === c.sid ? " sel" : "") + (linked ? " linked" : ""));
   d.dataset.sid = c.sid;
   const top = el("div", "top");
-  top.append(el("span", "slot",
-    c.slot == null ? "·" : String.fromCharCode(65 + c.slot)));
+  top.append(el("span", "slot", letter(c)));
   if (c.unread && c.lane !== "review") top.append(el("span", "unread-dot"));
   top.append(el("span", "title", c.title || c.project || c.sid.slice(0, 8)));
-  const meta = [c.project, c.model, c.ctx ? c.ctx + "%" : ""]
-    .filter(Boolean).join(" · ");
-  top.append(el("span", "meta", meta));
+  const meta = el("span", "meta");
+  if (c.project) {
+    const sw = el("span", "sw"); sw.style.background = hue(c.project);
+    meta.append(sw, el("span", "pj", c.project));
+  }
+  if (SHOW.branch && c.branch) {
+    const br = el("span", "br", c.branch); br.title = c.branch;
+    meta.append(document.createTextNode("·"), br);
+  }
+  const rest = [c.model, c.ctx ? c.ctx + "%" : ""].filter(Boolean).join(" · ");
+  if (rest) meta.append(document.createTextNode("· " + rest));
+  top.append(meta);
   d.append(top);
+  if (SHOW.note && c.note) d.append(noteLine(c));
   d.append(el("div", "state " + c.lane, stateLine(c)));
-  if (c.task) d.append(row("Task", c.task));
+  if (c.lane === "needs" && !c.snooze && c.pending && c.need !== "question")
+    d.append(el("pre", "perm", (c.pending_tool ? c.pending_tool + "\n" : "") + c.pending));
+  if (c.lane === "needs" && !c.snooze && c.need === "question") {
+    if (c.pending) d.append(row("Q", c.pending));
+    if (c.options && c.options.length) {
+      const o = el("div", "opts");
+      c.options.forEach((t, i) => { const x = el("span"); x.append(el("b", "", String(i + 1)), document.createTextNode(t)); o.append(x); });
+      d.append(o);
+    }
+  }
+  if (c.task) {
+    const r = row("Task", c.task);
+    if (c.progress) r.append(el("span", "prog", c.progress));
+    d.append(r);
+  }
+  if (SHOW.files && c.files && c.files.length && c.lane === "review")
+    d.append(el("div", "files", `${c.files.length} file${c.files.length === 1 ? "" : "s"} · ` + c.files.map(shortPath).join(", ")));
   if (c.prompt) d.append(row("You", c.prompt));
-  if (c.reply) d.append(row("Claude", isOpen ? plain(c.reply)
-                                            : lastPara(c.reply), "reply"));
+  if (c.reply) d.append(row("Claude", isOpen ? plain(c.reply) : lastPara(c.reply), "reply"));
   const chips = el("div", "chips");
   for (const s of c.subagents) chips.append(el("span", "chip",
     s.type + " · " + dur(s.age + live())));
@@ -208,28 +584,67 @@ function card(c, isOpen) {
       (t.gist ? ": " + t.gist : "");
     chips.append(ch);
   }
-  for (const p of c.peers.slice(0, 4)) {
-    const ch = el("span", "chip peer-" + p.dir, p.name + " " + ago(p.ts));
-    ch.title = p.gist || "";
-    chips.append(ch);
-  }
+  const groups = peerGroups(c, maps.byPid, maps.byName);
+  for (const g of groups.slice(0, 4)) chips.append(peerChip(c, g));
   if (c.pm) chips.append(el("span", "chip", c.pm));
   if (c.kind && c.kind !== "interactive") chips.append(el("span", "chip", c.kind));
   if (chips.childElementCount) d.append(chips);
-  const foot = el("div", "foot");
-  foot.append(el("span", "", c.started ? "started " + ago(c.started) : ""));
-  if (c.jump) {
-    const b = el("button", "", "Jump");
-    b.title = "Bring this session's terminal to the front";
-    b.onclick = (ev) => { ev.stopPropagation(); jump(c.sid); };
-    foot.append(b);
-  }
-  d.append(foot);
+  const pinned = st.pin && st.pin.from === c.sid ? groups.find(g => g.key === st.pin.key) : null;
+  if (pinned) d.append(popover(c, pinned));
+  d.append(actions(c, "foot"));
   d.onclick = () => {
-    if (open.has(c.sid)) open.delete(c.sid); else open.add(c.sid);
+    if (st.sel === c.sid) { st.sel = null; open.delete(c.sid); }
+    else { st.sel = c.sid; open.add(c.sid); }
     render();
   };
   return d;
+}
+const wide = () => matchMedia("(min-width: 1000px)").matches;
+function cardMaps(cards) {
+  const byPid = new Map(), byName = new Map();
+  for (const c of cards) { if (c.pid) byPid.set(c.pid, c); if (c.title) byName.set(c.title, c); }
+  const maps = { byPid, byName, linked: null };
+  if (st.pin) {       // the card a pinned peer popover points at
+    const from = cards.find(c => c.sid === st.pin.from);
+    const g = from && peerGroups(from, byPid, byName).find(g => g.key === st.pin.key);
+    maps.linked = g && g.target ? g.target.sid : null;
+  }
+  return maps;
+}
+
+// card foot / drawer action row: the same buttons, same rules
+function actions(c, cls) {
+  const foot = el("div", cls);
+  if (cls === "foot") {
+    foot.append(el("span", "", c.started ? "started " + ago(c.started) : ""));
+    foot.append(el("span", "sp"));
+  }
+  const btn = (label, fn, k) => {
+    const b = el("button", k || "", label);
+    b.onclick = (ev) => { ev.stopPropagation(); fn(); };
+    foot.append(b);
+    return b;
+  };
+  if (c.lane === "needs" && c.jump && !c.snooze && c.need === "permission") {
+    btn("Approve", () => answer(c, "approve"), "ok").title = "Send the dialog's accept key to this terminal";
+    btn("Deny", () => answer(c, "deny"), "no").title = "Send Escape to this terminal";
+  }
+  if (c.lane === "needs")
+    btn(c.snooze ? "Unsnooze" : "Snooze " + SNOOZE_MIN + "m",
+        () => mark(c, c.snooze ? "unsnooze" : "snooze", { minutes: SNOOZE_MIN }));
+  if (c.lane === "review" || (c.lane === "parked" && c.unread))
+    btn("Seen", () => markSeen(c), "seen").title = "Mark seen (e)";
+  if (c.lane === "done" && c.acked)
+    btn("Mark unread", () => mark(c, "unseen", {}, { lane: "review", unread: true, acked: false }));
+  if (c.jump) btn("Jump", () => jump(c)).title = "Bring this session's terminal to the front";
+  return foot;
+}
+
+// a path outside the session's cwd arrives absolute: keep its last two parts
+function shortPath(p) {
+  if (!p.startsWith("/")) return p;
+  const parts = p.split("/").filter(Boolean);
+  return parts.length > 2 ? "…/" + parts.slice(-2).join("/") : p;
 }
 // raw agent ids / socket paths -> something chip-sized
 function shortId(n) {
@@ -274,39 +689,157 @@ function lastPara(t) {
   return p.length > REPLY_COLLAPSED ? "…" + p.slice(-REPLY_COLLAPSED) : p;
 }
 
+// ---- drawer (wide screens): the selected card in full ----
+function renderDrawer(cards) {
+  const dr = document.getElementById("drawer");
+  const c = cards.find(x => x.sid === st.sel);
+  document.body.classList.toggle("drawer", !!c);
+  if (!c) { dr.replaceChildren(); return; }
+  // never rebuild under the user's cursor while they type a note
+  const active = document.activeElement;
+  if (active && active.classList.contains("noteedit") && dr.contains(active)) return;
+  dr.replaceChildren();
+  const h = el("h3");
+  h.append(el("span", "slot " + c.lane, letter(c)), el("span", "", c.title || c.project));
+  const x = el("button", "close", "×"); x.title = "Close (Esc)";
+  x.onclick = () => { st.sel = null; render(); };
+  h.append(x);
+  dr.append(h);
+  const meta = el("div", "dmeta");
+  if (c.project) { const sw = el("span", "sw"); sw.style.cssText = `width:10px;height:10px;border-radius:3px;background:${hue(c.project)}`; meta.append(sw, document.createTextNode(c.project)); }
+  for (const t of [c.branch, c.model, c.ctx ? c.ctx + "% context" : "", c.effort, c.pm,
+                   c.kind && c.kind !== "interactive" ? c.kind : "", c.pid ? "pid " + c.pid : ""])
+    if (t) meta.append(document.createTextNode("· " + t));
+  dr.append(meta);
+  dr.append(el("div", "state " + c.lane, stateLine(c)));
+  dr.append(actions(c, "dact"));
+
+  const section = (key, title, fill) => {
+    const s = el("section", DCLOSED.has(key) ? "closed" : "");
+    const hh = el("h4", "", title);
+    hh.onclick = () => { DCLOSED.has(key) ? DCLOSED.delete(key) : DCLOSED.add(key);
+                         store("csb-drawer-closed", [...DCLOSED]); render(); };
+    s.append(hh);
+    fill(s);
+    dr.append(s);
+  };
+  section("note", "Note", s => {
+    const inp = el("input", "noteedit");
+    inp.id = "note-" + c.sid; inp.value = c.note || "";
+    inp.placeholder = "one line, #tags filter the board";
+    inp.maxLength = 200;
+    const save = () => { if (inp.value !== (c.note || "")) mark(c, "note", { text: inp.value }, { note: inp.value }); };
+    inp.onkeydown = (ev) => { ev.stopPropagation(); if (ev.key === "Enter") { save(); inp.blur(); } if (ev.key === "Escape") { inp.value = c.note || ""; inp.blur(); } };
+    inp.onblur = save;
+    s.append(inp);
+  });
+  if (c.lane === "needs" && (c.pending || c.options.length)) section("pending", c.need === "question" ? "Question" : "Awaiting approval", s => {
+    if (c.pending) s.append(el("pre", "perm", (c.pending_tool && c.need !== "question" ? c.pending_tool + "\n" : "") + c.pending));
+    if (c.options.length) { const o = el("div", "opts"); c.options.forEach((t, i) => { const y = el("span"); y.append(el("b", "", String(i + 1)), document.createTextNode(t)); o.append(y); }); s.append(o); }
+  });
+  if (c.todos && c.todos.length) section("todos", "Plan " + (c.progress || ""), s => {
+    const ul = el("ul", "todos");
+    for (const t of c.todos) {
+      const li = el("li", t.s);
+      li.append(el("span", "mk", t.s === "completed" ? "✓" : t.s === "in_progress" ? "▸" : "◦"),
+                document.createTextNode(t.c));
+      ul.append(li);
+    }
+    s.append(ul);
+  });
+  if (c.files && c.files.length) section("files", "Files this turn", s => {
+    for (const f of c.files) s.append(el("div", "files", f));
+  });
+  section("exchanges", "Recent exchanges", s => {
+    const ex = c.exchanges && c.exchanges.length ? c.exchanges : [];
+    if (!ex.length && c.prompt) { s.append(exLine("You", c.prompt_ts, c.prompt)); }
+    for (const e of ex) s.append(exLine(e.who === "you" ? "You" : "Claude", e.ts, e.text));
+  });
+  if (c.reply) section("reply", "Last reply", s => s.append(el("div", "full", plain(c.reply))));
+  const maps = cardMaps(cards);
+  const groups = peerGroups(c, maps.byPid, maps.byName);
+  if (groups.length || (c.traffic && c.traffic.length)) section("peers", "Messages", s => {
+    for (const g of groups) {
+      s.append(el("div", "peerline", `${glyphOf(g)} ${g.target ? letter(g.target) + " " + g.target.title : g.name}`));
+      for (const p of g.msgs.slice(0, 5)) {
+        const l = el("div", "peerline");
+        l.append(el("span", "d", (p.dir === "out" ? "→" : "←") + " " + ago(p.ts)), document.createTextNode(p.gist || ""));
+        s.append(l);
+      }
+    }
+    for (const t of (c.traffic || []).slice(0, 5)) {
+      const l = el("div", "peerline");
+      l.append(el("span", "d", (t.dir === "out" ? "↪" : "↩") + " " + shortId(t.name) + " " + ago(t.ts)), document.createTextNode(t.gist || ""));
+      s.append(l);
+    }
+  });
+  const k = el("div", "kbd");
+  k.append("Keys: letter selects · ", el("kbd", "", "e"), " seen · ", el("kbd", "", "s"), " snooze · ",
+           el("kbd", "", "Enter"), " jump · ", el("kbd", "", "z"), " undo · ", el("kbd", "", "Esc"), " close");
+  dr.append(k);
+}
+function exLine(who, ts, text) {
+  const d = el("div", "ex");
+  d.append(el("span", "who", who), document.createTextNode(text));
+  if (ts) d.append(el("span", "when", ago(ts)));
+  return d;
+}
+
+// ---- render ----
 function render() {
   if (!doc) return;
+  if (st.pressing) { st.deferred = true; return; }
+  st.lastRender = Date.now();
+  const cards = allCards();
+  renderBar(cards);
+  const maps = cardMaps(cards);
   const main = document.getElementById("main");
   main.replaceChildren();
+  const vis = {}, hid = {};
   for (const [key, label] of LANES) {
-    const cards = doc.lanes[key] || [];
-    const lane = el("section", "lane" + (cards.length ? "" : " empty") +
+    const mine = cards.filter(c => c.lane === key);
+    const shown = mine.filter(visible);
+    for (const c of mine) {
+      const k = c.lane === "needs" && c.snooze ? "snoozed" : c.lane;
+      const tgt = visible(c) ? vis : hid;
+      tgt[k] = (tgt[k] || 0) + 1;
+    }
+    const lane = el("section", "lane" + (shown.length ? "" : " empty") +
       (COLLAPSED.has(key) ? " collapsed" : ""));
     lane.dataset.lane = key;
     const h = el("h2", "", label);
-    h.append(el("span", "n", String(cards.length)));
+    h.append(el("span", "n", String(shown.length)));
     h.onclick = () => {
       COLLAPSED.has(key) ? COLLAPSED.delete(key) : COLLAPSED.add(key);
-      localStorage.setItem("csb-collapsed", JSON.stringify([...COLLAPSED]));
+      store("csb-collapsed", [...COLLAPSED]);
       render();
     };
+    if (key === "review" && shown.length > 1) {
+      const b = el("button", "allseen", "mark all seen");
+      b.onclick = (ev) => { ev.stopPropagation(); shown.forEach(markSeen); };
+      h.append(b);
+    }
     lane.append(h);
     const box = el("div", "cards");
-    for (const c of cards) box.append(card(c, open.has(c.sid)));
+    if (key === "needs") shown.sort((a, b) => (a.snooze ? 1 : 0) - (b.snooze ? 1 : 0));
+    for (const c of shown) box.append(card(c, maps));
     lane.append(box);
     main.append(lane);
   }
-  const k = doc.counts;
-  const needs = k.needs || 0;
+  renderDrawer(cards);
+  const needs = vis.needs || 0, plus = hid.needs || 0;
   const sum = document.getElementById("sum");
   sum.replaceChildren();
   if (needs) sum.append(el("b", "", needs + " need" + (needs === 1 ? "s" : "") + " you"));
   else sum.append("nothing needs you");
-  sum.append(` · ${k.review || 0} to review · ${k.running || 0} running`);
+  sum.append(` · ${vis.review || 0} to review · ${vis.running || 0} running`);
+  if (vis.snoozed) sum.append(` · ${vis.snoozed} snoozed`);
   document.getElementById("h").textContent = "Claude fleet · " + doc.host;
-  document.title = (needs ? `(${needs}) ` : k.review ? "• " : "") +
-    "Claude fleet · " + doc.host;
-  favicon(needs ? "#cb6a44" : k.review ? "#2f9e5f" : "#9a978f");
+  const scope = F.p.size ? [...F.p].join(",") : F.t.size ? "#" + [...F.t].join(",") : "";
+  const pre = needs || plus ? `(${needs}${plus ? " +" + plus : ""}) ` : (vis.review || hid.review ? "• " : "");
+  document.title = pre + (scope ? scope + " · " : "") + "Claude fleet · " + doc.host;
+  const all = doc.counts || {};
+  favicon(all.needs ? "#cb6a44" : all.review ? "#2f9e5f" : "#9a978f");
 }
 
 let favColor = "";
@@ -321,16 +854,89 @@ function favicon(color) {
   document.getElementById("fav").href = c.toDataURL();
 }
 
-function jump(sid) {
-  fetch("/api/focus", { method: "POST",
+// ---- actions: POST to the bridge, optimistic until the next doc ----
+function post(path, body) {
+  return fetch(path, { method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ sid }) }).catch(() => {});
+    body: JSON.stringify(body) }).catch(() => {});
 }
+function jump(c) { post("/api/focus", { sid: c.sid }); toast(`Jump: ${letter(c)} ${c.title}`); }
+function mark(c, op, extra, patch) {
+  post("/api/mark", Object.assign({ sid: c.sid, op }, extra || {}));
+  if (patch) st.local[c.sid] = { patch, ts: Date.now() };
+  if (op === "snooze") st.local[c.sid] = { patch: { snooze: nowTs() + SNOOZE_MIN * 60 }, ts: Date.now() };
+  if (op === "unsnooze") st.local[c.sid] = { patch: { snooze: 0 }, ts: Date.now() };
+  render();
+}
+function markSeen(c) {
+  if (!(c.lane === "review" || (c.lane === "parked" && c.unread))) return;
+  post("/api/mark", { sid: c.sid, op: "seen", reply_ts: c.reply_ts || undefined });
+  st.local[c.sid] = { patch: { lane: "done", unread: false, acked: true,
+                               seen_ts: nowTs() }, ts: Date.now() };
+  st.undo.push({ sid: c.sid, lane: c.lane });
+  // the card must land somewhere visible: open Done if it was collapsed
+  if (COLLAPSED.has("done")) { COLLAPSED.delete("done"); store("csb-collapsed", [...COLLAPSED]); }
+  toast(`${letter(c)} ${c.title} marked seen`, true);
+  render();
+}
+function undo() {
+  const u = st.undo.pop();
+  if (!u) return;
+  post("/api/mark", { sid: u.sid, op: "unseen" });
+  st.local[u.sid] = { patch: { lane: u.lane, unread: true, acked: false }, ts: Date.now() };
+  hideToast(); render();
+}
+function answer(c, what) {
+  post("/api/answer", { sid: c.sid, answer: what });
+  toast(`${letter(c)}: ${what === "approve" ? "accept" : "Escape"} sent to its terminal`);
+}
+function toast(msg, undoable) {
+  const t = document.getElementById("toast");
+  document.getElementById("toastmsg").textContent = msg;
+  document.getElementById("undo").style.display = undoable ? "" : "none";
+  t.classList.add("on");
+  clearTimeout(st.toastTimer);
+  st.toastTimer = setTimeout(hideToast, 8000);
+}
+function hideToast() { document.getElementById("toast").classList.remove("on"); }
+document.getElementById("undo").onclick = undo;
+
+document.addEventListener("keydown", (ev) => {
+  const tag = (ev.target.tagName || "").toLowerCase();
+  if (tag === "input" || tag === "textarea" || ev.metaKey || ev.ctrlKey || ev.altKey) return;
+  if (!doc) return;
+  const cards = allCards();
+  const cur = cards.find(c => c.sid === st.sel);
+  const k = ev.key;
+  if (k === "Escape") { st.sel = null; st.pin = null; render(); return; }
+  if (k === "z") { undo(); return; }
+  if (k === "e" && cur) { markSeen(cur); return; }
+  if (k === "s" && cur && cur.lane === "needs") { mark(cur, cur.snooze ? "unsnooze" : "snooze", { minutes: SNOOZE_MIN }); return; }
+  if (k === "Enter" && cur && cur.jump) { jump(cur); return; }
+  if (k.length === 1 && /[a-zA-Z]/.test(k)) {
+    const i = k.toUpperCase().charCodeAt(0) - 65;
+    const c = cards.find(x => x.slot === i && visible(x));
+    if (c) { st.sel = c.sid; render(); }
+  }
+});
+document.addEventListener("click", () => { if (st.pin) { st.pin = null; render(); } });
 
 function accept(d) {
   doc = d;
   skew = Date.now() / 1000 - d.ts;
   lastMsg = Date.now();
+  // an optimistic patch holds until the bridge's document agrees with it
+  // (the next step, normally), with a 10 s cap so a refused command can't
+  // leave a phantom card behind
+  const server = {};
+  for (const [key] of LANES) for (const c of (d.lanes[key] || [])) server[c.sid] = c;
+  for (const sid of Object.keys(st.local)) {
+    const o = st.local[sid], c = server[sid];
+    const agreed = !c || Object.keys(o.patch).every(k =>
+      k === "seen_ts" ? true : k === "snooze" ? !!c[k] === !!o.patch[k]
+      : c[k] === o.patch[k]);
+    if (agreed || Date.now() - o.ts > 10000) delete st.local[sid];
+  }
   document.body.classList.remove("off");
   render();
 }
@@ -342,7 +948,9 @@ fetch("/api/board").then(r => r.json()).then(d => { if (d.lanes) accept(d); })
 // the bridge steps at ~1 Hz: no event for 6s means it is gone
 setInterval(() => {
   if (Date.now() - lastMsg > 6000) document.body.classList.add("off");
-  else if (doc) render();     // tick timers between events
+  // tick timers between events, but not on top of a render the SSE
+  // event just did: one rebuild a second is enough churn
+  else if (doc && Date.now() - st.lastRender > 700) render();
 }, 1000);
 </script>
 </body>

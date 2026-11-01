@@ -166,6 +166,9 @@ def base_cfg(**over):
     # and the fleet snapshot: missing parent dir -> the write no-ops
     cfg["fleet_file"] = os.path.join(
         tempfile.gettempdir(), "csb-tests-no-fleet", "fleet.json")
+    # and the board marks (seen/snooze/notes): same trick
+    cfg["marks_file"] = os.path.join(
+        tempfile.gettempdir(), "csb-tests-no-marks", "marks.json")
     cfg.update(over)
     return cfg
 

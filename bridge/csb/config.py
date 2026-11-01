@@ -97,6 +97,7 @@ DEFAULT_CONFIG = {
     "registry_dir": "",              # "" = <claude config dir>/sessions
     "parked_after_s": 14400,         # web board: quiet this long -> "parked" lane
     "slots_file": "",                # "" = data_dir()/slots.json (stable slot letters)
+    "marks_file": "",                # "" = data_dir()/marks.json (board: seen/snooze/notes)
     # opt-in chime on a session's transition into wait / done: each value
     # an afplay(mac)/paplay(linux)-able sound path, "" = silent. One sound
     # per 10s globally, never on the first packet after startup.
@@ -113,6 +114,12 @@ DEFAULT_CONFIG = {
     # minimap click selects the session instead.
     "focus": {
         "adapter": "auto",
+        # web board Approve / Deny on a permission dialog: the keystroke
+        # sent to the session's terminal (tmux send-keys names; iTerm2
+        # maps Enter/Escape itself). Change if your Claude Code's dialog
+        # binds differently.
+        "approve_key": "Enter",
+        "deny_key": "Escape",
     },
     # input bindings, pushed to the display on connect. Actions:
     # "cycle" (next/prev session), "page" (toggle status/usage),

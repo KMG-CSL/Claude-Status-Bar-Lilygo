@@ -23,6 +23,8 @@ cd bridge && ./.venv/bin/python -m unittest discover -s tests -v   # all tests
 ./.venv/bin/python -m csb.statusline install|uninstall|status      # opt-in
 ./.venv/bin/python -m csb.board [line]   # fleet table / statusLine row (reads fleet.json)
 open http://127.0.0.1:45732/             # web board (bridge must be running)
+#   ?p=<project>,<project>&t=<tag> pins a tab to a subset; marks.json in
+#   the data dir holds Seen / snooze / notes (delete it to reset)
 ```
 
 Tests never open serial ports, hit the network, or touch `~/.claude/`

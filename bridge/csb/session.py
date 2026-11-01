@@ -51,6 +51,9 @@ SUBAGENT_HOOK_TTL_S = 3 * 3600
 # card text caps (board view); the wire packet has its own, smaller ones
 PROMPT_MAX = 600
 REPLY_MAX = 1200
+EXCHANGE_MAX = 400       # per entry in the "last exchanges" drawer list
+PENDING_MAX = 400        # full text of the call awaiting approval
+EDIT_TOOLS = frozenset(("Edit", "Write", "MultiEdit", "NotebookEdit"))
 
 
 def _sock_pid(addr):
@@ -61,6 +64,33 @@ def _sock_pid(addr):
 
 def _one_line(text, cap):
     return " ".join((text or "").split())[:cap]
+
+
+def _pending_text(name, inp):
+    """Full "what is this call" for the board card (the LCD gets
+    tool_detail's 36 chars): Bash shows the whole command, file tools
+    the path, a question its text plus the option labels."""
+    out = {"tool": str(name or "Tool"), "text": "", "options": []}
+    if not isinstance(inp, dict):
+        return out
+    qs = inp.get("questions")
+    if isinstance(qs, list) and qs and isinstance(qs[0], dict):
+        out["text"] = _one_line(str(qs[0].get("question") or ""), PENDING_MAX)
+        opts = qs[0].get("options")
+        if isinstance(opts, list):
+            out["options"] = [
+                _one_line(str(o.get("label") if isinstance(o, dict) else o),
+                          80) for o in opts][:6]
+        return out
+    for key in ("command", "file_path", "target_file", "notebook_path",
+                "pattern", "url", "query", "description", "path", "prompt"):
+        v = inp.get(key)
+        if isinstance(v, str) and v.strip():
+            # a command keeps its line breaks (shown in a <pre>)
+            out["text"] = (v.strip() if key == "command"
+                           else _one_line(v, PENDING_MAX))[:PENDING_MAX]
+            return out
+    return out
 
 
 def _result_text(block):
@@ -105,6 +135,15 @@ class Session:
         self.last_prompt_ts = None    # ...and when: "seen" for unread
         self.last_reply_ts = None     # newest assistant text record
         self.current_task = ""        # TodoWrite in_progress item
+        self.todos = []               # newest TodoWrite list: [(content, status)]
+        self.git_branch = ""          # newest gitBranch on any record
+        self.turn_files = []          # files the edit tools touched this turn
+        self.exchanges = deque(maxlen=6)   # (who, ts, text): recent turns
+        self.pending_text = {}        # tool_use id -> {"tool","text","options"}
+        # user marks from the web board (csb.marks), applied every step
+        self.seen_ts = 0.0            # reply ts acknowledged on the board
+        self.snooze_until = 0.0       # Needs-you muted until (0 = no)
+        self.note = ""
         # cross-session traffic, unfiltered: (dir "in"|"out", name, ts,
         # gist, pid or 0). attention.card splits it into live peers vs
         # subagent/worker traffic using the live registry.
@@ -215,6 +254,10 @@ class Session:
             # launch dir is what KVM focus must match against lsof
             self.cwd = cwd
 
+        gb = rec.get("gitBranch")
+        if isinstance(gb, str) and gb.strip():
+            self.git_branch = gb.strip()[:60]
+
         # print-mode / SDK sessions record entrypoint "sdk-cli" (interactive
         # is "cli") — captured so the display can exclude one-shot probes
         ep = rec.get("entrypoint")
@@ -255,6 +298,7 @@ class Session:
                     if b.get("type") == "tool_result":
                         has_tool_result = True
                         self.pending_ids.pop(b.get("tool_use_id", ""), None)
+                        self.pending_text.pop(b.get("tool_use_id", ""), None)
                         self.task_ids.pop(b.get("tool_use_id", ""), None)
                         self.task_since.pop(b.get("tool_use_id", ""), None)
                         # structured "limit reached|<epoch>" only: tool
@@ -284,8 +328,10 @@ class Session:
             if not has_tool_result and human and text.strip():
                 self.last_prompt = _one_line(text, PROMPT_MAX)
                 self.last_prompt_ts = ts
+                self.exchanges.append(("you", ts, _one_line(text, EXCHANGE_MAX)))
             if not has_tool_result:
                 self.turn_start = ts
+                self.turn_files = []  # a new turn's footprint starts empty
                 self.error = ""       # a real prompt is the user acting on it
                 self.fin = ""         # new turn: last outcome is history
                 self._turn_tail.clear()
@@ -339,22 +385,44 @@ class Session:
                 if b.get("type") == "tool_use":
                     self.pending_ids[b.get("id", "")] = (
                         b.get("name", "Tool"), ts, tool_detail(b.get("input")))
+                    self.pending_text[b.get("id", "")] = _pending_text(
+                        b.get("name"), b.get("input"))
                     self._note_tool(b.get("name"), b.get("input"), ts)
                 elif b.get("type") == "text":
                     text += b.get("text", "")
             if text:
                 self.last_assistant_text = text[-REPLY_MAX:]
                 self.last_reply_ts = ts
+                self._reply_exchange(text, ts)
             self._turn_tail.append((False, ts))
             self.last_role = "assistant"
             self.last_event_ts = ts
 
+    def _reply_exchange(self, text, ts):
+        """The drawer's exchange list keeps one entry per reply: the END
+        of the newest text in the turn (where Claude left off)."""
+        t = text if len(text) <= EXCHANGE_MAX else "…" + text[-EXCHANGE_MAX:]
+        t = _one_line(t, EXCHANGE_MAX + 1)
+        if self.exchanges and self.exchanges[-1][0] == "claude":
+            self.exchanges[-1] = ("claude", ts, t)
+        else:
+            self.exchanges.append(("claude", ts, t))
+
     def _note_tool(self, name, inp, ts):
         """Card facts carried by tool calls: who this session messages
-        (SendMessage) and what it is working on (TodoWrite)."""
+        (SendMessage), what it is working on (TodoWrite) and which files
+        it touched this turn (edit tools)."""
         if not isinstance(inp, dict):
             return
-        if name == "SendMessage":
+        if name in EDIT_TOOLS:
+            p = inp.get("file_path") or inp.get("notebook_path") or ""
+            if isinstance(p, str) and p:
+                root = (self.cwd or "").rstrip("/\\")
+                rel = p[len(root) + 1:] if root and p.startswith(root + "/") else p
+                if rel not in self.turn_files:
+                    self.turn_files.append(rel)
+                    del self.turn_files[:-20]
+        elif name == "SendMessage":
             to = str(inp.get("to") or "?")[:80]
             self.peers.append(("out", to, ts,
                                _one_line(inp.get("summary")
@@ -368,6 +436,10 @@ class Session:
                 t = cur[0] if cur else {}
                 self.current_task = _one_line(
                     t.get("activeForm") or t.get("content"), 120)
+                self.todos = [
+                    (_one_line(x.get("content") or x.get("activeForm"), 120),
+                     str(x.get("status") or ""))
+                    for x in todos if isinstance(x, dict)][:30]
 
     # ---- hook edges (Item 1) ----
     def apply_hook(self, ev):
@@ -403,6 +475,7 @@ class Session:
             if isinstance(reply, str) and reply.strip():
                 self.last_assistant_text = reply[-REPLY_MAX:]
                 self.last_reply_ts = ts
+                self._reply_exchange(reply, ts)
             self.perm_prompt_at = None
             # unresolved Task-family tool_use at Stop is delegation, not a
             # cancelled turn: background workers outlive the orchestrator's
@@ -432,6 +505,7 @@ class Session:
             # the turn is over: still-unmatched tool_use ids were abandoned
             # (Escape) and must not read as pending approval (fragile #5)
             self.pending_ids.clear()
+            self.pending_text.clear()
         elif name == "PreToolUse":
             # installer matcher is ExitPlanMode|AskUserQuestion; re-check
             # here so a user-widened matcher can't arm the latch spuriously
@@ -473,6 +547,7 @@ class Session:
             self.perm_prompt_at = None
             self.done_latch = None
             self.pending_ids.clear()
+            self.pending_text.clear()
             self.task_ids.clear()
             self.task_since.clear()
             self.subagents.clear()
@@ -490,6 +565,7 @@ class Session:
                 self.turn_stopped_at = ts
             self.perm_prompt_at = None
             self.pending_ids.clear()  # nothing left to approve
+            self.pending_text.clear()
             self.task_ids.clear()     # the claude process (and its workers) exited
             self.task_since.clear()
             self.subagents.clear()

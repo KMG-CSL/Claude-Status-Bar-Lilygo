@@ -106,19 +106,26 @@ still within a 120 s grace after the turn's Stop. Past the grace, a
 delegation whose `tool_result` never came (interrupted, crashed worker)
 is retired for good, so it can't pin the session in Running.
 
-**Unread** = settled, not cancelled, and the last reply is newer than the
-user's last *human* prompt. Transcript user records carry
-`origin.kind`: `"human"` for real prompts, `"peer"` for messages from
-other sessions (with sender `name`/`body`), others for task notifications.
-Only human prompts count as "seen" (older transcripts without `origin`:
-non-`isMeta` counts as human). Both timestamps come from the transcript,
-so **unread needs no store and survives bridge restarts**. Escape
-(`fin = cancel`) counts as seen.
+**Unread** = settled, not cancelled, and the last reply is newer than
+both the user's last *human* prompt and the reply they marked **Seen**
+on the board. Transcript user records carry `origin.kind`: `"human"` for
+real prompts, `"peer"` for messages from other sessions (with sender
+`name`/`body`), others for task notifications. Only human prompts count
+as "seen" (older transcripts without `origin`: non-`isMeta` counts as
+human). Escape (`fin = cancel`) counts as seen.
 
-Consequence of "seen = you prompted it": "Done, seen" is rarely
-populated. A finished session sits in Review until you reply, or parks
-after 4 quiet hours with its dot. A click-to-dismiss is a small
-follow-up if that turns out to be wrong (BACKLOG).
+**Seen marks** (`csb/marks.py`, `marks.json` in the data dir) store
+`{sid: reply_ts}`: the ack names the reply it acknowledged, so a newer
+reply is unread again with no expiry logic, and undo is deleting the
+entry. The core copies the marks onto each Session every step
+(`seen_ts`, `snooze_until`, `note`), and `is_unread` is the one reader,
+so the LCD's `ur` and the board's lanes flip together: the cell goes
+from solid green to the seen tick with no firmware change. Nothing
+auto-acks: expanding a card or jumping to it is looking, not deciding.
+The same file holds **snooze** (`{sid: until}`, Needs-you muted for 30
+min: out of the headline count, tab title and favicon, sorted last in
+its lane, still breathing on the LCD) and the one-line **note** (`#tags`
+in it feed the board's tag filter).
 
 ## Chime: once per real finish
 
@@ -152,15 +159,67 @@ All cheap: parsed from records the tailer already reads.
 - Layout: lanes side by side at ≥ 1000 px (empty and collapsed lanes
   shrink to a header), stacked on narrow screens.
 
+### Round 2 (2026-11-01): marks, richer cards, filters, Approve
+
+- **Peer chips** carry the peer's `pid` (registry name, else the
+  board's own title for that pid, never a socket path). The page
+  aggregates per peer: `⇄ C orchestrator · 3 · 4m`, mini slot square
+  in the peer's lane colour. Click pins a popover (last three messages,
+  Open / Jump to the peer); the peer's card gets an outline. Hover
+  state would die on the 1 Hz re-render, so everything is click-to-pin.
+  No drawn arrows: lanes re-sort every second.
+- **Needs-you cards show the whole pending call** (`pending_tool` +
+  `pending`: the full Bash command, the file path, a question's text
+  and option labels), from the transcript's `tool_use` input, where the
+  LCD's `td` has 36 chars.
+- **Drawer** (≥ 1000 px, right side, keyed by the selected card; letters
+  select, Esc closes): note editor, the pending call, the full todo list
+  with progress (`3/7` on the card's Task row), files the edit tools
+  touched *this turn* (relative to cwd, reset on each human prompt), the
+  last six exchanges (one entry per reply: the END of its last text),
+  the whole last reply, and every peer message with its gist. Sections
+  collapse individually (remembered per browser). Below 1000 px the
+  card expands in place as before.
+- **Filter bar**: projects from `project` (cwd basename), tags from
+  `#tags` in notes. Click isolates, shift-click adds, swatch click
+  recolours. Filters live in the URL (`?p=a,b&t=x`) so a tab can be
+  pinned to one project; never in localStorage, because hidden state in
+  an attention tool must be visible. **Guard**: a Needs-you hidden by
+  the filter shows as an orange `+1 needs you in <project>` pill in the
+  bar, the tab title counts `(shown +hidden)`, and the favicon stays
+  fleet-wide. Project colour is a 10 px desaturated swatch beside the
+  project name (eight hues, none of them a lane colour, hashed from the
+  name, override kept in localStorage); lane colour keeps the slot
+  square, borders and state line. `Show` toggles (branch, files, note)
+  are display prefs and do live in localStorage.
+- **Approve / Deny** on a Needs-you card: `POST /api/answer` types ONE
+  key into the session's terminal through the focus adapter (`tmux
+  send-keys -t <pane>` for the pane that owns the session's tty; iTerm2
+  `write text … newline NO` on the session matched by tty). Shown under
+  the same rule as Jump, and only for `need == "permission"`. The core
+  re-checks on the bridge thread *after* that step's poll: the session
+  must still be in a **hook-evidenced** permission wait (`perm_prompt_at`
+  armed, `src == "h"`), not a plan, a question, an error, a rate limit,
+  nor the transcript tier's silence guess — or nothing is sent, and the
+  log says why. Keys come from `focus.approve_key` / `deny_key`
+  (defaults `Enter` / `Escape`, Claude Code's dialog accept/cancel).
+  Questions get Jump, not Enter.
+- **Keys**: letter selects the card with that slot, `e` seen, `s`
+  snooze, `Enter` jump, `z` undo (8 s toast), `Esc` close.
+
 ## Security of the localhost endpoints
 
 The listener binds `127.0.0.1` only. Transcript text is sensitive, so:
 
 - GETs require `Host: 127.0.0.1:<port>` or `localhost:<port>`, which
   blocks DNS-rebinding pages from reading `/api/board`.
-- `POST /api/focus` additionally requires `Content-Type:
-  application/json` (a cross-origin page can't send that without a CORS
-  preflight, which we never answer) and a same-host `Origin` when present.
+- `POST /api/focus`, `/api/mark` and `/api/answer` additionally require
+  `Content-Type: application/json` (a cross-origin page can't send that
+  without a CORS preflight, which we never answer) and a same-host
+  `Origin` when present. Bodies are validated field by field (`csb/web.py`
+  `_command`): unknown ops, out-of-range snooze minutes and non-string
+  notes are 400, never enqueued. `/api/answer` is the one route that
+  acts on a terminal; its guard is the bridge-side re-check above.
 - `board.html` inserts all transcript text via `textContent`, never HTML.
 - SSE writes time out after 10 s, so a stalled tab is dropped, not kept.
 
