@@ -141,28 +141,39 @@ fi
 # cst3530 branch. Optional for old-revision boards and CST boards with
 # healthy chip firmware -- but a missing blob silently compiles out the
 # re-upload path (touch_drv.h __has_include), so a failed download is fatal
-# unless CSB_SKIP_TOUCH_FW=1. Fetched via the github.com branch zip, not
-# raw.githubusercontent.com, which some corporate proxies (Zscaler) 403.
+# unless CSB_SKIP_TOUCH_FW=1. Fetched via a github.com COMMIT archive, not
+# raw.githubusercontent.com (some corporate proxies 403 it) and not the
+# branch head: this header is flashed INTO the touch chip, so it is pinned
+# to a commit and its sha256 is checked before it may enter the sketch.
+# To bump: update both values together after verifying the new blob on a
+# real board.
+CST_COMMIT="3deece89098f25e7d155e41e4e0f5dd8b368ab02"
+CST_SHA256="c547b2aca919e3cce6b145b5820e0106a923a2cdb429a7b532e9c1eb9070a4c5"
 if [[ ! -f "$SKETCH/cst3530_fw.h" ]]; then
-    step "Downloading CST3530 touch firmware blob (cst3530 branch zip)..."
+    step "Downloading CST3530 touch firmware blob (commit ${CST_COMMIT:0:10})..."
     CST_ZIP="$BUILD/cst3530.zip"
     cst_ok=0
-    if curl -fsSL "https://github.com/Xinyuan-LilyGO/T-Display-S3-Long/archive/refs/heads/T-Display-S3-Long-cst3530.zip" -o "$CST_ZIP"; then
-        if python3 - "$CST_ZIP" "$SKETCH/cst3530_fw.h" <<'PYEOF'
-import sys, zipfile
+    if curl -fsSL "https://github.com/Xinyuan-LilyGO/T-Display-S3-Long/archive/$CST_COMMIT.zip" -o "$CST_ZIP"; then
+        if python3 -I - "$CST_ZIP" "$SKETCH/cst3530_fw.h" "$CST_SHA256" <<'PYEOF'
+import hashlib, sys, zipfile
 with zipfile.ZipFile(sys.argv[1]) as z:
     names = [n for n in z.namelist() if n.endswith("hyn_chips/cst3530_fw.h")]
-    if not names:
-        sys.exit("cst3530_fw.h not found in branch zip - repo layout may have changed")
-    with z.open(names[0]) as src, open(sys.argv[2], "wb") as dst:
-        dst.write(src.read())
+    if len(names) != 1:
+        sys.exit(f"expected one cst3530_fw.h in the archive, found {len(names)} - repo layout may have changed")
+    blob = z.read(names[0])
+got = hashlib.sha256(blob).hexdigest()
+if got != sys.argv[3]:
+    sys.exit(f"cst3530_fw.h sha256 mismatch: got {got}, pinned {sys.argv[3]} - "
+             "the pinned commit's archive changed; do NOT flash an unverified blob")
+with open(sys.argv[2], "wb") as dst:
+    dst.write(blob)
 PYEOF
         then cst_ok=1; fi
     fi
     rm -f "$CST_ZIP"
     if [[ $cst_ok != 1 ]]; then
         rm -f "$SKETCH/cst3530_fw.h"
-        [[ "${CSB_SKIP_TOUCH_FW:-}" == 1 ]] || die "CST3530 touch firmware download failed.
+        [[ "${CSB_SKIP_TOUCH_FW:-}" == 1 ]] || die "CST3530 touch firmware download/verify failed.
 Without cst3530_fw.h, new-revision boards whose touch chip has bad firmware
 get NO TOUCH, and nothing else in the build will warn you. Fix the network
 (github.com must be reachable) or rerun with CSB_SKIP_TOUCH_FW=1 to build

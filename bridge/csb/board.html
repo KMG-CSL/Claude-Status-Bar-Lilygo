@@ -196,6 +196,10 @@
   button.seen:hover { border-color: var(--green); color: var(--green); }
   button.ok { border-color: var(--green) !important; color: var(--green) !important; }
   button.no { border-color: var(--red) !important; color: var(--red) !important; }
+  .ans { font-size: 11px; color: var(--muted); }
+  .ans.sent { color: var(--green); }
+  .ans.refused { color: var(--red); }
+  .trunc { font-size: 11px; color: var(--orange, #e0a040); margin: 2px 0 4px; }
   .unread-dot { width: 7px; height: 7px; border-radius: 50%;
                 background: var(--green); flex: none; }
   .toast { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%);
@@ -298,7 +302,8 @@ window.addEventListener("popstate", () => { F = readFilters(); render(); });
 let doc = null, skew = 0, lastMsg = 0;
 const open = new Set();      // narrow-screen expanded cards, by session id
 const st = { sel: null, pin: null, local: {}, undo: [], toastTimer: 0,
-             pressing: false, deferred: false, lastRender: 0 };
+             pressing: false, deferred: false, lastRender: 0,
+             answering: {} };   // sid -> {token, what, ts}: a POSTed answer awaiting its result
 // A click needs mousedown and mouseup on the SAME element; a DOM rebuild
 // in between swallows it. So no render while a pointer is down.
 document.addEventListener("pointerdown", () => { st.pressing = true; }, true);
@@ -552,8 +557,10 @@ function card(c, maps) {
   d.append(top);
   if (SHOW.note && c.note) d.append(noteLine(c));
   d.append(el("div", "state " + c.lane, stateLine(c)));
-  if (c.lane === "needs" && !c.snooze && c.pending && c.need !== "question")
+  if (c.lane === "needs" && !c.snooze && c.pending && c.need !== "question") {
     d.append(el("pre", "perm", (c.pending_tool ? c.pending_tool + "\n" : "") + c.pending));
+    if (c.pending_truncated) d.append(el("div", "trunc", "⚠ text cut short — review it in the terminal before approving"));
+  }
   if (c.lane === "needs" && !c.snooze && c.need === "question") {
     if (c.pending) d.append(row("Q", c.pending));
     if (c.options && c.options.length) {
@@ -625,19 +632,40 @@ function actions(c, cls) {
     foot.append(b);
     return b;
   };
-  if (c.lane === "needs" && c.jump && !c.snooze && c.need === "permission") {
+  const ans = answerState(c);
+  if (ans) foot.append(el("span", "ans " + ans.cls, ans.text));
+  if (c.lane === "needs" && !c.snooze && c.can_answer && !ans) {
     btn("Approve", () => answer(c, "approve"), "ok").title = "Send the dialog's accept key to this terminal";
     btn("Deny", () => answer(c, "deny"), "no").title = "Send Escape to this terminal";
   }
   if (c.lane === "needs")
     btn(c.snooze ? "Unsnooze" : "Snooze " + SNOOZE_MIN + "m",
-        () => mark(c, c.snooze ? "unsnooze" : "snooze", { minutes: SNOOZE_MIN }));
+        () => mark(c, c.snooze ? "unsnooze" : "snooze", { minutes: SNOOZE_MIN })).title = "Snooze (-)";
   if (c.lane === "review" || (c.lane === "parked" && c.unread))
-    btn("Seen", () => markSeen(c), "seen").title = "Mark seen (e)";
+    btn("Seen", () => markSeen(c), "seen").title = "Mark seen (Space)";
   if (c.lane === "done" && c.acked)
     btn("Mark unread", () => mark(c, "unseen", {}, { lane: "review", unread: true, acked: false }));
   if (c.jump) btn("Jump", () => jump(c)).title = "Bring this session's terminal to the front";
   return foot;
+}
+
+// What the card says about an answer for the dialog it shows now (token
+// match), or null: "sending…" while our POST awaits the bridge's verdict,
+// then the bridge's own result. A new dialog (new token) clears it.
+function answerState(c) {
+  if (c.lane !== "needs" || !c.answer_token) return null;
+  const w = st.answering[c.sid];
+  const r = c.answer_result;
+  if (r && r.token === c.answer_token) {
+    if (w && w.token === r.token) delete st.answering[c.sid];
+    return r.ok ? { cls: "sent", text: (r.answer === "approve" ? "accept" : "Escape") + " sent · waiting for the session" }
+                : { cls: "refused", text: "not sent: " + r.reason };
+  }
+  if (w && w.token === c.answer_token) {
+    if (Date.now() - w.ts > 10000) { delete st.answering[c.sid]; return { cls: "refused", text: "no answer from the bridge" }; }
+    return { cls: "wait", text: "sending " + (w.what === "approve" ? "accept" : "Escape") + "…" };
+  }
+  return null;
 }
 
 // a path outside the session's cwd arrives absolute: keep its last two parts
@@ -774,8 +802,8 @@ function renderDrawer(cards) {
     }
   });
   const k = el("div", "kbd");
-  k.append("Keys: letter selects · ", el("kbd", "", "e"), " seen · ", el("kbd", "", "s"), " snooze · ",
-           el("kbd", "", "Enter"), " jump · ", el("kbd", "", "z"), " undo · ", el("kbd", "", "Esc"), " close");
+  k.append("Keys: letter selects · ", el("kbd", "", "Space"), " seen · ", el("kbd", "", "-"), " snooze · ",
+           el("kbd", "", "Enter"), " jump · ", el("kbd", "", "⌫"), " undo · ", el("kbd", "", "Esc"), " close");
   dr.append(k);
 }
 function exLine(who, ts, text) {
@@ -856,9 +884,13 @@ function favicon(color) {
 
 // ---- actions: POST to the bridge, optimistic until the next doc ----
 function post(path, body) {
+  // 202 only means "queued for the bridge thread"; anything else is a
+  // refusal the user must see, not a silent nothing
   return fetch(path, { method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body) }).catch(() => {});
+    body: JSON.stringify(body) })
+    .then(r => { if (!r.ok) toast(`${path.replace("/api/", "")} rejected (${r.status})`); return r.ok; })
+    .catch(() => { toast("bridge unreachable"); return false; });
 }
 function jump(c) { post("/api/focus", { sid: c.sid }); toast(`Jump: ${letter(c)} ${c.title}`); }
 function mark(c, op, extra, patch) {
@@ -887,8 +919,33 @@ function undo() {
   hideToast(); render();
 }
 function answer(c, what) {
-  post("/api/answer", { sid: c.sid, answer: what });
-  toast(`${letter(c)}: ${what === "approve" ? "accept" : "Escape"} sent to its terminal`);
+  const w = st.answering[c.sid];
+  if (!c.can_answer || !c.answer_token || (w && w.token === c.answer_token)) return;
+  st.answering[c.sid] = { token: c.answer_token, what, ts: Date.now() };
+  post("/api/answer", { sid: c.sid, answer: what, token: c.answer_token })
+    .then(ok => { if (!ok) delete st.answering[c.sid]; render(); });
+  toast(`${letter(c)}: ${what === "approve" ? "accept" : "Escape"} queued…`);
+  render();
+}
+// the bridge's verdict for an answer: toast each (session, dialog) once,
+// and forget pending answers whose dialog is gone (a session that left
+// Needs-you before its result rendered must not block its next dialog)
+const toasted = new Set();     // "sid:token" already announced
+function answerToasts(d) {
+  const needs = d.lanes.needs || [];
+  const live = new Set(needs.map(c => c.sid + ":" + c.answer_token));
+  for (const sid of Object.keys(st.answering))
+    if (!live.has(sid + ":" + st.answering[sid].token)) delete st.answering[sid];
+  for (const k of toasted) if (!live.has(k)) toasted.delete(k);
+  for (const c of needs) {
+    const r = c.answer_result;
+    if (!r || r.token !== c.answer_token) continue;
+    const key = c.sid + ":" + r.token;
+    if (toasted.has(key)) continue;
+    toasted.add(key);
+    toast(`${letter(c)}: ` + (r.ok ? `${r.answer === "approve" ? "accept" : "Escape"} sent to its terminal`
+                                   : `${r.answer} refused — ${r.reason}`));
+  }
 }
 function toast(msg, undoable) {
   const t = document.getElementById("toast");
@@ -909,9 +966,11 @@ document.addEventListener("keydown", (ev) => {
   const cur = cards.find(c => c.sid === st.sel);
   const k = ev.key;
   if (k === "Escape") { st.sel = null; st.pin = null; render(); return; }
-  if (k === "z") { undo(); return; }
-  if (k === "e" && cur) { markSeen(cur); return; }
-  if (k === "s" && cur && cur.lane === "needs") { mark(cur, cur.snooze ? "unsnooze" : "snooze", { minutes: SNOOZE_MIN }); return; }
+  // actions never use bare letters: those select slots (A.. up to the
+  // configured session count), and "e for seen" ate slot E
+  if (k === "Backspace") { ev.preventDefault(); undo(); return; }
+  if (k === " " && cur) { ev.preventDefault(); markSeen(cur); return; }
+  if (k === "-" && cur && cur.lane === "needs") { mark(cur, cur.snooze ? "unsnooze" : "snooze", { minutes: SNOOZE_MIN }); return; }
   if (k === "Enter" && cur && cur.jump) { jump(cur); return; }
   if (k.length === 1 && /[a-zA-Z]/.test(k)) {
     const i = k.toUpperCase().charCodeAt(0) - 65;
@@ -938,6 +997,7 @@ function accept(d) {
     if (agreed || Date.now() - o.ts > 10000) delete st.local[sid];
   }
   document.body.classList.remove("off");
+  answerToasts(d);
   render();
 }
 

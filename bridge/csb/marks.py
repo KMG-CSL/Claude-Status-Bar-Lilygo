@@ -15,6 +15,7 @@ on /clear and processes exit, so the file never grows past the fleet.
 """
 
 import json
+import math
 import os
 import time
 
@@ -48,9 +49,14 @@ class Marks:
             if isinstance(v, dict):
                 for sid, val in v.items():
                     try:
-                        store[str(sid)] = typ(val)
+                        val = typ(val)
                     except (TypeError, ValueError):
                         continue
+                    # a non-finite stamp would reach the board as
+                    # `Infinity`, which JSON.parse rejects: the page dies
+                    if typ is float and not math.isfinite(val):
+                        continue
+                    store[str(sid)] = val
         t = d.get("touched")
         if isinstance(t, dict):
             for sid, ts in t.items():
@@ -82,8 +88,13 @@ class Marks:
 
     # ---- seen ----
     def mark_seen(self, sid, reply_ts, now=None):
+        """Seen is monotonic: a late Seen for an OLDER reply (second tab,
+        slow request) must not un-ack a newer one. Only unsee() clears."""
         now = time.time() if now is None else now
-        self.seen[sid] = float(reply_ts or now)
+        ts = float(reply_ts or now)
+        if not math.isfinite(ts):
+            return
+        self.seen[sid] = max(self.seen.get(sid, 0.0), ts)
         self._touch(sid, now)
         self._save(now)
 

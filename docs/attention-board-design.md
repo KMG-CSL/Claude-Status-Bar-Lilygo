@@ -193,23 +193,69 @@ All cheap: parsed from records the tailer already reads.
   square, borders and state line. `Show` toggles (branch, files, note)
   are display prefs and do live in localStorage.
 - **Approve / Deny** on a Needs-you card: `POST /api/answer` types ONE
-  key into the session's terminal through the focus adapter (`tmux
-  send-keys -t <pane>` for the pane that owns the session's tty; iTerm2
-  `write text … newline NO` on the session matched by tty). Shown under
-  the same rule as Jump, and only for `need == "permission"`. The core
-  re-checks on the bridge thread *after* that step's poll: the session
-  must still be in a **hook-evidenced** permission wait (`perm_prompt_at`
-  armed, `src == "h"`), not a plan, a question, an error, a rate limit,
-  nor the transcript tier's silence guess — or nothing is sent, and the
-  log says why. Keys come from `focus.approve_key` / `deny_key`
-  (defaults `Enter` / `Escape`, Claude Code's dialog accept/cancel).
-  Questions get Jump, not Enter.
-- **Keys**: letter selects the card with that slot, `e` seen, `s`
-  snooze, `Enter` jump, `z` undo (8 s toast), `Esc` close.
+  key into the session's terminal (`tmux -S <socket> send-keys -t %pane`
+  for the pane that owns the session's tty, on the server the session's
+  own `$TMUX` names; iTerm2 `write text … newline NO` on the session
+  matched by tty). Keys come from `focus.approve_key` / `deny_key`
+  (defaults `Enter` / `Escape`: the dialog opens with Yes highlighted;
+  whether `1` picks Yes directly is unverified, so the default stays
+  Enter). Questions and plans get Jump, not Enter. The rules, after the
+  2026-11-01 review:
+  - **One predicate** (`attention.answerable`) decides both what the
+    card offers (`can_answer`) and what the bridge sends — never
+    `need_kind`, which is display text. It requires: `st == wait`, not
+    rate-limited, not an error, the hook latch armed with **kind
+    `permission`** (the `Notification` type is kept on the Session as
+    `perm_kind`; `elicitation_dialog`, `elicitation_url_dialog` and
+    `agent_needs_input` arm the wait but are never answerable — Enter
+    on an MCP form is not an approval), `src == "h"` (hook-fresh, so a
+    stale latch plus a transcript silence guess is refused), the
+    pending text not truncated (`PENDING_MAX` 2000 chars; longer is cut
+    *and* flagged `pending_truncated`, and the card says so instead of
+    offering Approve — never approve text you cannot read), and not
+    already answered.
+  - **Token-bound**: every Needs-you card carries `answer_token` =
+    `sid:latch-ms:newest-pending-tool_use-id`. The POST must echo it;
+    the bridge refuses a mismatch ("the dialog changed since the page
+    rendered") and records the token as answered *before* sending, so a
+    second click on the same dialog, from any tab, types nothing. The
+    card shows "accept sent · waiting for the session" until a new
+    token (new dialog) replaces it.
+  - **Strict binding** (`focus.resolve_strict`): a keystroke needs the
+    live registry entry for *this* session id (a `/clear` moves the pid
+    to a new id), whose pid is alive, whose start stamp still matches
+    the registry's `procStart` (re-read at send time: a reused pid is a
+    different program), agreeing with the hook's ppid when known, and
+    owning a tty. No cwd scan, no "newest pid" guess — those remain
+    Jump's. Without a live registry Approve is simply never offered.
+  - **Honest outcome**: `202` means queued. The bridge records
+    `answer_result {token, answer, ok, reason}` on the session; it rides
+    on the card and the page toasts sent / refused (with the reason) /
+    no answer. Adapter failures (`osascript`/`tmux` missing, hung,
+    timing out) are contained in `focus._run` and reported as failed —
+    they cannot take `step()` down.
+  - **Residual**: nothing fires on the approval itself (PreToolUse
+    precedes the dialog; PostToolUse follows the tool). If you approve
+    a long Bash *in the terminal*, the latch and token stay valid until
+    it finishes, and a board click in that window types Enter into a
+    running session's input box (harmless when empty; submits whatever
+    is typed there). The real fix is a `PermissionRequest` hook
+    answering allow/deny (BACKLOG).
+- **Keys**: letter selects the card with that slot (so no action is a
+  bare letter — `e` used to eat slot E), `Space` seen, `-` snooze,
+  `Enter` jump, `Backspace` undo (8 s toast), `Esc` close.
 
 ## Security of the localhost endpoints
 
-The listener binds `127.0.0.1` only. Transcript text is sensitive, so:
+**Threat model, stated plainly:** the board is a single-user tool on a
+single-user machine. Loopback binding plus the Host / Origin /
+Content-Type checks below stop *browsers* — a web page you happen to
+visit cannot read the board or press Approve. They do **not** stop
+other local processes or users: anything running on the box can `POST
+/api/answer` directly, and can POST fake hook events that arm the
+latch. That is accepted for this setup; it is not multi-tenant safe
+and should not be exposed beyond loopback. Transcript text is
+sensitive, so:
 
 - GETs require `Host: 127.0.0.1:<port>` or `localhost:<port>`, which
   blocks DNS-rebinding pages from reading `/api/board`.
@@ -217,9 +263,20 @@ The listener binds `127.0.0.1` only. Transcript text is sensitive, so:
   `Content-Type: application/json` (a cross-origin page can't send that
   without a CORS preflight, which we never answer) and a same-host
   `Origin` when present. Bodies are validated field by field (`csb/web.py`
-  `_command`): unknown ops, out-of-range snooze minutes and non-string
-  notes are 400, never enqueued. `/api/answer` is the one route that
-  acts on a terminal; its guard is the bridge-side re-check above.
+  `_command`): unknown ops, out-of-range snooze minutes, non-string
+  notes, a missing answer token, and any number that is a bool, NaN,
+  infinite or outside a plausible epoch (`1e9..1e10`; `1e309` parses to
+  `inf` and would have reached the page as a bare `Infinity`) are 400,
+  never enqueued. The board document is serialised with
+  `allow_nan=False` and `marks.json` drops non-finite stamps on load.
+  Seen stamps are monotonic per session (a late Seen for an older reply
+  can't un-ack a newer one; only an explicit unseen clears) and clamped
+  to the newest reply the bridge knows. `/api/answer` is the one route
+  that acts on a terminal; its guards are the predicate, token and
+  strict binding above.
+- Every response carries `Content-Security-Policy: frame-ancestors
+  'none'` and `X-Frame-Options: DENY`: the board cannot be framed, so a
+  hostile page cannot steer a click onto a real Approve button.
 - `board.html` inserts all transcript text via `textContent`, never HTML.
 - SSE writes time out after 10 s, so a stalled tab is dropped, not kept.
 

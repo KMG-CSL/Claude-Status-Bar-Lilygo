@@ -79,8 +79,10 @@ class FocusIterm2Case(unittest.TestCase):
         self.assertIn("no-session", detail)
 
 
-TMUX_PANES = ("/dev/pts/3 work:2.0\n"
-              "/dev/pts/7 side:0.1\n")
+# list-panes -F "#{pane_tty} #{pane_id} #{window_id}": the stable ids,
+# not session:window.pane, which renames and re-indexing invalidate
+TMUX_PANES = ("/dev/pts/3 %1 @0\n"
+              "/dev/pts/7 %5 @2\n")
 
 
 class TmuxAdapterCase(unittest.TestCase):
@@ -100,9 +102,14 @@ class TmuxAdapterCase(unittest.TestCase):
             ctx(tty="/dev/pts/7", env={"TMUX": "/tmp/sock,1,0"}), run)
         self.assertTrue(ok)
         sent = [" ".join(c) for c in run.calls]
-        self.assertTrue(any("select-window -t side:0" in s for s in sent))
-        self.assertTrue(any("select-pane -t side:0.1" in s for s in sent))
+        self.assertTrue(any("select-window -t @2" in s for s in sent))
+        self.assertTrue(any("select-pane -t %5" in s for s in sent))
         self.assertTrue(any(s.startswith("wmctrl -i -a") for s in sent))
+        # every tmux call addresses the SESSION's server (its $TMUX socket),
+        # not whatever server the bridge's own environment would pick
+        for c in run.calls:
+            if c[0] == "tmux":
+                self.assertEqual(c[1:3], ["-S", "/tmp/sock"], c)
 
     def test_not_under_tmux_still_raises_the_window(self):
         # no TMUX in env -> nothing to select, but the raise still happens

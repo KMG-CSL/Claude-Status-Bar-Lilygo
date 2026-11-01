@@ -121,9 +121,24 @@ end run
 """
 
 
+class _Failed:
+    """What _run hands back when the command could not run at all: the
+    adapters read .returncode/.stdout/.stderr and report it as a FAILED
+    attempt — a missing tmux/osascript or a hung AppleScript must never
+    unwind through step() and take the serial link and the board down."""
+    returncode = 1
+    stdout = ""
+
+    def __init__(self, err):
+        self.stderr = f"{type(err).__name__}: {err}"
+
+
 def _run(cmd, timeout=5):
-    return subprocess.run(cmd, capture_output=True, text=True,
-                          timeout=timeout)
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True,
+                              timeout=timeout)
+    except (OSError, subprocess.SubprocessError, ValueError) as e:
+        return _Failed(e)
 
 
 def claude_pids_by_cwd(cwd, runner=_run):
@@ -235,16 +250,25 @@ def focus_iterm2(ctx, runner=_run):
     return ok, (r.stdout or r.stderr or "").strip()
 
 
-def tmux_pane_for(tty, runner=_run):
-    """-> "session:window.pane" whose pane_tty matches, or ""."""
-    out = runner(["tmux", "list-panes", "-a", "-F",
-                  "#{pane_tty} #{session_name}:#{window_index}.#{pane_index}"
-                  ]).stdout
+def tmux_cmd(env):
+    """["tmux", "-S", <socket>] for the server the session's own TMUX
+    points at ("socket_path,server_pid,session_index"), else plain
+    ["tmux"]. The bridge's environment may name a different server (or
+    none): the session's is the one whose pane we must address."""
+    sock = (env or {}).get("TMUX", "").split(",")[0]
+    return ["tmux", "-S", sock] if sock else ["tmux"]
+
+
+def tmux_pane_for(tty, runner=_run, env=None):
+    """-> (pane_id, window_id) owning `tty` — the stable %N / @N ids,
+    which survive renames and re-indexing — or ("", "")."""
+    out = runner(tmux_cmd(env) + ["list-panes", "-a", "-F",
+                                  "#{pane_tty} #{pane_id} #{window_id}"]).stdout
     for ln in out.splitlines():
-        parts = ln.split(None, 1)
-        if len(parts) == 2 and parts[0] == tty:
-            return parts[1].strip()
-    return ""
+        parts = ln.split()
+        if len(parts) == 3 and parts[0] == tty:
+            return parts[1], parts[2]
+    return "", ""
 
 
 def focus_tmux(ctx, runner=_run):
@@ -257,16 +281,16 @@ def focus_tmux(ctx, runner=_run):
     """
     pane, detail = "", []
     if ctx["env"].get("TMUX"):
-        pane = tmux_pane_for(ctx["tty"], runner=runner)
+        tmux = tmux_cmd(ctx["env"])
+        pane, win = tmux_pane_for(ctx["tty"], runner=runner, env=ctx["env"])
         if pane:
-            win = pane.rsplit(".", 1)[0]
-            sel = runner(["tmux", "select-window", "-t", win])
-            runner(["tmux", "select-pane", "-t", pane])
+            sel = runner(tmux + ["select-window", "-t", win])
+            runner(tmux + ["select-pane", "-t", pane])
             # switch-client fails with "no current client" on a detached
             # server (verified on tmux 3.7b) — harmless, the select-window
             # above has already moved the session, so its rc is ignored on
             # purpose. It matters only when a client IS attached elsewhere.
-            runner(["tmux", "switch-client", "-t", win])
+            runner(tmux + ["switch-client", "-t", win])
             if sel.returncode != 0:
                 detail.append("pane select failed: "
                               + (sel.stderr or "").strip())
@@ -306,7 +330,8 @@ def focus_slot(core, sl, runner=_run):
 
 def _resolve(core, ses, runner=_run):
     """session -> (adapter name, ctx) for the adapter calls, or None with
-    the reason logged. Shared by focus (Jump) and send_key (Approve)."""
+    the reason logged. Jump only — it guesses (cwd scan, newest pid) when
+    the exact binding is gone; a keystroke uses resolve_strict instead."""
     if not enabled(core.cfg):
         announce(core.cfg)
         return None
@@ -349,18 +374,23 @@ def _resolve(core, ses, runner=_run):
 
 def focus_session(core, ses, runner=_run):
     """Focus one Session's terminal (display slot or web board). Logs
-    outcome; False when nothing could be raised."""
+    outcome; False when nothing could be raised. Never raises: the
+    caller is the bridge's step loop."""
     t0 = time.time()
-    res = _resolve(core, ses, runner=runner)
-    if res is None:
+    try:
+        res = _resolve(core, ses, runner=runner)
+        if res is None:
+            return False
+        name, ctx = res
+        fn = ADAPTERS.get(name)
+        if fn is None:
+            log("focus", f"{ses.project}: no adapter named {name!r} "
+                f"(have: {', '.join(sorted(ADAPTERS))})")
+            return False
+        ok, detail = fn(ctx, runner=runner)
+    except Exception as e:          # adapter bug or odd platform state
+        log("focus", f"{ses.project}: focus FAILED: {type(e).__name__}: {e}")
         return False
-    name, ctx = res
-    fn = ADAPTERS.get(name)
-    if fn is None:
-        log("focus", f"{ses.project}: no adapter named {name!r} "
-            f"(have: {', '.join(sorted(ADAPTERS))})")
-        return False
-    ok, detail = fn(ctx, runner=runner)
     log("focus", f"{ses.project} via {name} pid={ctx['pid']} tty={ctx['tty']} "
         f"-> {'focused' if ok else 'FAILED'}{': ' + detail if detail else ''} "
         f"({int((time.time() - t0) * 1000)}ms)")
@@ -368,9 +398,63 @@ def focus_session(core, ses, runner=_run):
 
 
 # ---- send one key (board Approve / Deny) ----
-# Same identity chain as focus, then ONE keystroke typed into that exact
-# tty. The caller (core._answer) has already verified the session is in
-# a permission dialog; this layer only knows how to reach the terminal.
+# ONE keystroke typed into one exact tty. The caller (core._answer) has
+# verified the session is in a permission dialog; this layer only knows
+# how to reach the terminal — and, unlike Jump, it never guesses which.
+
+
+def _proc_start(pid):
+    from .registry import _proc_start as ps     # local: no import cycle
+    return ps(pid)
+
+
+def bound_pid(ses):
+    """-> (pid, "") when the session has an exact process binding, else
+    (None, reason). No subprocess: the card's can_answer asks this every
+    step, and resolve_strict starts from it, so the board never offers
+    Approve on a session the bridge would refuse to type into."""
+    reg = getattr(ses, "reg", None) or {}
+    pid = reg.get("pid")
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        return None, "no live registry entry (exact binding needs it)"
+    if reg.get("sessionId") != ses.session_id:
+        return None, "registry pid now belongs to another session"
+    if ses.claude_pid and ses.claude_pid != pid:
+        return None, f"hook ppid {ses.claude_pid} != registry pid {pid}"
+    return pid, ""
+
+
+def resolve_strict(core, ses, runner=_run, proc_start=_proc_start):
+    """session -> (adapter name, ctx) or (None, reason). The binding a
+    keystroke demands, where Jump may guess: the live registry entry for
+    THIS session id (so /clear, which moves a pid to a new session, is
+    seen), whose pid is alive and still the process the registry
+    recorded (start stamp compared again right now — a reused pid is a
+    different program), agreeing with the hook's ppid when one is known,
+    and owning a tty. Any doubt is a refusal with the reason."""
+    if not enabled(core.cfg):
+        return None, "focus adapter off"
+    pid, why = bound_pid(ses)
+    if pid is None:
+        return None, why
+    reg = ses.reg or {}
+    try:
+        os.kill(pid, 0)
+    except (OSError, ProcessLookupError):
+        return None, f"pid {pid} is gone"
+    want = " ".join(str(reg.get("procStart") or "").split())
+    got = " ".join(str(proc_start(pid) or "").split())
+    if want and got and want != got:
+        return None, f"pid {pid} was reused (start {got!r} != {want!r})"
+    if want and not got:
+        return None, f"pid {pid}: start time unreadable, not sending"
+    tty = tty_of(str(pid), runner=runner)
+    if not tty:
+        return None, f"pid {pid} has no tty"
+    ctx = {"pid": str(pid), "tty": tty, "cwd": ses.cwd,
+           "session_id": ses.session_id,
+           "env": env_of(str(pid), runner=runner)}
+    return adapter_for(core.cfg), ctx
 
 _ITERM_SEND = """
 on run argv
@@ -408,34 +492,40 @@ def send_tmux(ctx, key, runner=_run):
     is no pane to type into: an honest no, never a window-wide guess."""
     if not ctx["env"].get("TMUX"):
         return False, "session is not under tmux"
-    pane = tmux_pane_for(ctx["tty"], runner=runner)
+    pane, _win = tmux_pane_for(ctx["tty"], runner=runner, env=ctx["env"])
     if not pane:
         return False, f"TMUX set but no pane owns {ctx['tty']}"
-    r = runner(["tmux", "send-keys", "-t", pane, key])
+    r = runner(tmux_cmd(ctx["env"]) + ["send-keys", "-t", pane, key])
     return r.returncode == 0, (r.stderr or "").strip()
 
 
 SENDERS = {"iterm2": send_iterm2, "tmux": send_tmux}
 
 
-def send_key_session(core, ses, key, runner=_run):
+def send_key_session(core, ses, key, runner=_run, proc_start=_proc_start):
     """Type `key` (tmux key name: Enter, Escape, ...) into the session's
-    terminal. Logs the outcome; False when it could not be delivered."""
+    terminal. -> (ok, detail); logs the outcome; never raises."""
     t0 = time.time()
-    res = _resolve(core, ses, runner=runner)
-    if res is None:
-        return False
-    name, ctx = res
-    fn = SENDERS.get(name)
-    if fn is None:
-        log("focus", f"{ses.project}: adapter {name!r} cannot send keys")
-        return False
-    ok, detail = fn(ctx, key, runner=runner)
+    try:
+        name, ctx = resolve_strict(core, ses, runner=runner,
+                                   proc_start=proc_start)
+        if name is None:
+            log("focus", f"{ses.project}: send {key} refused: {ctx}")
+            return False, ctx
+        fn = SENDERS.get(name)
+        if fn is None:
+            log("focus", f"{ses.project}: adapter {name!r} cannot send keys")
+            return False, f"adapter {name} cannot send keys"
+        ok, detail = fn(ctx, key, runner=runner)
+    except Exception as e:
+        log("focus", f"{ses.project}: send {key} FAILED: "
+            f"{type(e).__name__}: {e}")
+        return False, f"{type(e).__name__}: {e}"
     log("focus", f"{ses.project} send {key} via {name} pid={ctx['pid']} "
         f"tty={ctx['tty']} -> {'sent' if ok else 'FAILED'}"
         f"{': ' + detail if detail else ''} "
         f"({int((time.time() - t0) * 1000)}ms)")
-    return ok
+    return ok, detail
 
 
 # populated last: the adapters must exist before they can be registered

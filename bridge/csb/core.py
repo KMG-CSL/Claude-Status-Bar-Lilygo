@@ -255,10 +255,11 @@ class BridgeCore:
             session.apply_hook(ev)
         for s in self.sessions.values():
             self.marks.apply(s, now)
-        # Approve/Deny run against the freshest state (after poll + edges)
-        for s, ev in self._answers:
+        # Approve/Deny run against the freshest state (after poll + edges);
+        # the queue is taken BEFORE running so a failure can't replay it
+        answers, self._answers = self._answers, []
+        for s, ev in answers:
             self._answer(s, ev, now)
-        self._answers = []
         self.usage.add_events(new_usage)
         self._limit_alerts(now)
         pkt = build_packet(
@@ -442,9 +443,13 @@ class BridgeCore:
         now = ev.get("ts") or time.time()
         sid = s.session_id
         if op == "seen":
-            # the reply being acknowledged: the client's, else the newest
-            ts = ev.get("reply_ts") or s.last_reply_ts or s.last_event_ts or now
-            self.marks.mark_seen(sid, ts, now)
+            # the reply being acknowledged: the client's (so a reply that
+            # landed after the page rendered stays unread), bounded by the
+            # newest reply we know — a stamp from the future would ack
+            # replies that have not happened yet
+            newest = s.last_reply_ts or s.last_event_ts or now
+            ts = ev.get("reply_ts") or newest
+            self.marks.mark_seen(sid, min(ts, newest), now)
         elif op == "unseen":
             self.marks.unsee(sid, now)
         elif op == "snooze":
@@ -458,24 +463,38 @@ class BridgeCore:
         log("board", f"{s.title()[:24]}: {op}")
 
     def _answer(self, s, ev, now):
-        """Approve / Deny from the board. Re-checked here, at send time:
-        the session must still be in a HOOK-evidenced permission wait (a
-        Notification permission_prompt latch) — not a plan, a question, an
-        error or a rate limit, and not the transcript tier's silence
-        guess — or nothing is typed into its terminal."""
+        """Approve / Deny from the board. Re-checked here, at send time,
+        with the one predicate the card's buttons also use
+        (attention.answerable): a hook-evidenced permission dialog, not a
+        plan / question / elicitation / error / rate limit, full text
+        shown, not already answered. The token must still name the
+        dialog on screen; it is consumed on send so a second click, or a
+        click that lands after the dialog changed, types nothing. The
+        outcome rides on the card (answer_result) for the toast."""
         from . import focus
-        r = derive(s, self.cfg, now)
-        kind = attention.need_kind(s, r)
         answer = ev.get("answer")
-        if (r.st != "wait" or r.lim or kind != "permission"
-                or s.perm_prompt_at is None):
-            log("board", f"{s.title()[:24]}: {answer} refused — not in a "
-                f"permission dialog (st={r.st} need={kind} src={r.src})")
-            return False
-        fcfg = self.cfg.get("focus") or {}
-        key = (fcfg.get("approve_key") or "Enter") if answer == "approve" \
-            else (fcfg.get("deny_key") or "Escape")
-        return focus.send_key_session(self, s, key)
+        token = ev.get("token") or ""
+        r = derive(s, self.cfg, now)
+        ok, why = attention.answerable(s, r)
+        current = attention.answer_token(s)
+        if ok and token != current:
+            ok, why = False, "the dialog changed since the page rendered"
+        key = ""
+        if ok:
+            fcfg = self.cfg.get("focus") or {}
+            key = (fcfg.get("approve_key") or "Enter") if answer == "approve" \
+                else (fcfg.get("deny_key") or "Escape")
+            s.answered_token = token        # consumed before the send:
+            sent, why = focus.send_key_session(self, s, key)   # one try per dialog
+            ok = bool(sent)
+            if not ok:
+                why = why or "keystroke not delivered"
+        else:
+            log("board", f"{s.title()[:24]}: {answer} refused — {why} "
+                f"(st={r.st} src={r.src} kind={getattr(s, 'perm_kind', '')})")
+        s.answer_result = {"token": token, "answer": answer, "ok": ok,
+                           "reason": "" if ok else why, "ts": now}
+        return ok
 
     def _limit_alerts(self, now):
         """Announce a newly-hit rate limit once per cooldown window; the

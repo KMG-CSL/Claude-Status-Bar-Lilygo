@@ -9,9 +9,10 @@ consumer of the same engine state the serial link sends, no new process.
                            focus adapter exists (never required)
     POST /api/mark         {"sid", "op": seen|unseen|snooze|unsnooze|note,
                             "reply_ts"?, "minutes"?, "text"?} -> csb.marks
-    POST /api/answer       {"sid", "answer": approve|deny} -> keystroke to
-                           the session's terminal, re-checked on the
-                           bridge thread (permission dialog only)
+    POST /api/answer       {"sid", "answer": approve|deny, "token"} ->
+                           keystroke to the session's terminal, re-checked
+                           on the bridge thread (permission dialog only;
+                           the token must name the dialog still on screen)
 
 Bound to 127.0.0.1 only (the listener). GETs also check the Host header
 so a DNS-rebinding page can't read the board; the POST additionally
@@ -20,6 +21,7 @@ a CORS preflight we never answer) and a same-host Origin when present.
 """
 
 import json
+import math
 import os
 import threading
 import time
@@ -43,7 +45,11 @@ class BoardFeed:
         self.closed = False
 
     def publish(self, doc):
-        data = json.dumps(doc, separators=(",", ":")).encode("utf-8")
+        # allow_nan=False: a NaN/inf anywhere would serialize as a bare
+        # `NaN`/`Infinity` the browser's JSON.parse rejects — fail here,
+        # loudly, instead of freezing every open tab
+        data = json.dumps(doc, separators=(",", ":"),
+                          allow_nan=False).encode("utf-8")
         with self._cond:
             self._data = data
             self._version += 1
@@ -87,6 +93,11 @@ def _send(handler, code, body=b"", ctype="text/plain; charset=utf-8"):
     handler.send_header("Content-Type", ctype)
     handler.send_header("Content-Length", str(len(body)))
     handler.send_header("Cache-Control", "no-store")
+    # never framed: a page that embeds the board invisibly could steer a
+    # click onto a real Approve button (clickjacking)
+    handler.send_header("Content-Security-Policy", "frame-ancestors 'none'")
+    handler.send_header("X-Frame-Options", "DENY")
+    handler.send_header("X-Content-Type-Options", "nosniff")
     handler.end_headers()
     if body:
         handler.wfile.write(body)
@@ -145,6 +156,21 @@ MARK_OPS = ("seen", "unseen", "snooze", "unsnooze", "note")
 ANSWERS = ("approve", "deny")
 NOTE_MAX = 200
 SNOOZE_MAX_MIN = 24 * 60
+TOKEN_MAX = 200
+# a plausible unix epoch (2001..2286): bools, NaN, inf, 1e309 and
+# millisecond stamps are all out
+EPOCH_MIN, EPOCH_MAX = 1e9, 1e10
+
+
+def _number(v, lo, hi):
+    """-> float when v is a real, finite number within [lo, hi]; None
+    otherwise. bool is an int in Python, so it is excluded by name."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    f = float(v)
+    if not math.isfinite(f) or not lo <= f <= hi:
+        return None
+    return f
 
 
 def _command(cmd, body):
@@ -159,19 +185,29 @@ def _command(cmd, body):
         if op not in MARK_OPS:
             return None
         ev["op"] = op
-        if op == "seen" and isinstance(body.get("reply_ts"), (int, float)):
-            ev["reply_ts"] = float(body["reply_ts"])
+        if op == "seen" and body.get("reply_ts") is not None:
+            ts = _number(body["reply_ts"], EPOCH_MIN, EPOCH_MAX)
+            if ts is None:
+                return None
+            ev["reply_ts"] = ts
         if op == "snooze":
-            mins = body.get("minutes", 30)
-            if not isinstance(mins, (int, float)) or not 1 <= mins <= SNOOZE_MAX_MIN:
+            mins = _number(body.get("minutes", 30), 1, SNOOZE_MAX_MIN)
+            if mins is None:
                 return None
             ev["minutes"] = int(mins)
         if op == "note":
-            ev["text"] = str(body.get("text") or "")[:NOTE_MAX]
+            text = body.get("text", "")
+            if not isinstance(text, str):
+                return None
+            ev["text"] = text[:NOTE_MAX]
     elif cmd == "answer":
         if body.get("answer") not in ANSWERS:
             return None
+        token = body.get("token")
+        if not isinstance(token, str) or not token or len(token) > TOKEN_MAX:
+            return None             # an answer must name its dialog
         ev["answer"] = body["answer"]
+        ev["token"] = token
     return ev
 
 

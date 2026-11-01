@@ -7,6 +7,7 @@ import http.client
 import json
 import os
 import queue
+import subprocess
 import tempfile
 import time
 import unittest
@@ -78,6 +79,24 @@ class MarksStoreTest(unittest.TestCase):
         m.mark_seen("old", T0, now=T0)
         m.mark_seen("new", T0, now=T0 + 40 * 86400)
         self.assertEqual(set(Marks(self.path).seen), {"new"})
+
+    def test_seen_is_monotonic_until_an_explicit_unseen(self):
+        m = Marks(self.path)
+        m.mark_seen("s", T0 + 50, now=T0 + 60)      # newer reply acked first
+        m.mark_seen("s", T0 + 10, now=T0 + 61)      # a late Seen for an older one
+        self.assertEqual(m.seen["s"], T0 + 50)
+        m.mark_seen("s", float("inf"), now=T0 + 62)
+        self.assertEqual(m.seen["s"], T0 + 50)
+        m.unsee("s")
+        m.mark_seen("s", T0 + 10, now=T0 + 63)
+        self.assertEqual(m.seen["s"], T0 + 10)
+
+    def test_non_finite_stamps_in_the_file_are_dropped(self):
+        with open(self.path, "w") as f:
+            f.write('{"seen": {"a": Infinity, "b": 5.0}, "snooze": {"c": NaN},'
+                    ' "notes": {}, "touched": {}}')
+        m = Marks(self.path)
+        self.assertEqual((m.seen, m.snooze), ({"b": 5.0}, {}))
 
     def test_unwritable_path_is_swallowed(self):
         m = Marks(os.path.join(self.tmp.name, "nope", "marks.json"))
@@ -219,6 +238,20 @@ class SeenFlowTest(unittest.TestCase):
         k, c = lanes["sess-1"]
         return k, pkt["ses"][0]["ur"], c
 
+    def test_a_future_reply_ts_is_clamped_to_the_newest_reply(self):
+        # a client stamp past the newest reply would pre-ack replies that
+        # have not happened: the bridge acks the newest it knows instead
+        k, ur, c = self.lane_and_ur(self.now)
+        self.q.put({"_cmd": "mark", "sid": "sess-1", "op": "seen",
+                    "reply_ts": c["reply_ts"] + 10 * 86400, "ts": self.now + 1})
+        k, ur, c = self.lane_and_ur(self.now + 2)
+        self.assertEqual((k, c["seen_ts"]), ("done", c["reply_ts"]))
+        # ...so a reply that lands later is unread again
+        from tests.helpers import append_jsonl
+        append_jsonl(self.path, [assistant_text(self.now + 3, "more!")])
+        k, ur, c = self.lane_and_ur(self.now + 60)    # settled: 57 s quiet
+        self.assertEqual((k, ur), ("review", 1))
+
     def test_seen_moves_to_done_flips_ur_and_survives_restart(self):
         k, ur, c = self.lane_and_ur(self.now)
         self.assertEqual((k, ur, c["acked"]), ("review", 1, False))
@@ -287,8 +320,9 @@ class SnoozeTest(unittest.TestCase):
 # ------------------------------------------------------------- approve
 
 class AnswerTest(unittest.TestCase):
-    """Approve/Deny only reaches the terminal for a hook-evidenced
-    permission dialog, checked after the step's poll."""
+    """Approve/Deny reaches the terminal only through attention.answerable
+    (the card's can_answer and the send share it), bound to the token of
+    the dialog on screen, once per dialog, with the outcome on the card."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -304,42 +338,156 @@ class AnswerTest(unittest.TestCase):
         self.core = BridgeCore(self.cfg, usage=stub_usage(self.cfg),
                                hook_queue=self.q)
         self.sent = []
-        p = mock.patch.object(focus, "send_key_session",
-                              lambda core, s, key: self.sent.append(key) or True)
-        p.start()
-        self.addCleanup(p.stop)
+        # the terminal side is StrictBindingTest's business: here the
+        # adapter can act, the process binding holds, and sends succeed
+        for target, fn, stub in (
+                (focus, "send_key_session",
+                 lambda core, s, key, **kw: (self.sent.append(key) or True, "")),
+                (BridgeCore, "_can_jump", lambda self_, s, now=None: True),
+                (attention, "_bound", lambda s: True)):
+            p = mock.patch.object(target, fn, stub)
+            p.start()
+            self.addCleanup(p.stop)
 
     def tearDown(self):
         self.tmp.cleanup()
 
-    def arm(self):
-        self.q.put(ev("UserPromptSubmit", self.now - 30, self.path))
-        self.q.put(ev("Notification", self.now - 25, self.path,
-                      notification_type="permission_prompt"))
+    def arm(self, ntype="permission_prompt", at=None):
+        at = self.now - 25 if at is None else at
+        self.q.put(ev("UserPromptSubmit", at - 5, self.path))
+        self.q.put(ev("Notification", at, self.path, notification_type=ntype))
 
-    def test_approve_and_deny_send_the_configured_keys(self):
+    def needs(self):
+        lane = self.core.board_doc["lanes"]["needs"]
+        return lane[0] if lane else None
+
+    def answer(self, what, token=None, at=None):
+        c = self.needs()
+        self.q.put({"_cmd": "answer", "sid": "sess-1", "answer": what,
+                    "token": c["answer_token"] if token is None else token,
+                    "ts": at or self.now})
+
+    def test_approve_sends_once_then_the_dialog_is_spent(self):
         self.arm()
         self.core.step(now=self.now)
-        c = self.core.board_doc["lanes"]["needs"][0]
-        self.assertEqual((c["need"], c["src"], c["pending"]),
-                         ("permission", "h", "git push"))
-        self.q.put({"_cmd": "answer", "sid": "sess-1", "answer": "approve",
-                    "ts": self.now})
+        c = self.needs()
+        self.assertEqual((c["need"], c["src"], c["pending"], c["can_answer"]),
+                         ("permission", "h", "git push", True))
+        self.assertTrue(c["answer_token"].startswith("sess-1:"))
+        self.assertTrue(c["answer_token"].endswith(":b1"))
+        self.answer("approve")
         self.core.step(now=self.now + 1)
-        self.q.put({"_cmd": "answer", "sid": "sess-1", "answer": "deny",
-                    "ts": self.now + 1})
+        self.assertEqual(self.sent, ["Enter"])
+        c = self.needs()
+        self.assertEqual((c["answer_result"]["ok"], c["answer_result"]["answer"],
+                          c["answer_result"]["token"]),
+                         (True, "approve", c["answer_token"]))
+        # the long-running-approved-tool case: no PostToolUse yet, the latch
+        # is still armed, the card still shows the dialog — but it is
+        # spent: no Approve offered, and a second click types nothing
+        self.assertFalse(c["can_answer"])
+        self.answer("deny")
         self.core.step(now=self.now + 2)
-        self.assertEqual(self.sent, ["Enter", "Escape"])
+        self.assertEqual(self.sent, ["Enter"])
+        self.assertIn("already answered", self.needs()["answer_result"]["reason"])
+
+    def test_without_an_exact_binding_approve_is_not_even_offered(self):
+        # jump may be a cwd guess; a keystroke needs the registry binding,
+        # so the card must not offer what the bridge would refuse
+        attention._bound = lambda s: False
+        self.arm()
+        self.core.step(now=self.now)
+        c = self.needs()
+        self.assertEqual((c["jump"], c["can_answer"]), (True, False))
+
+    def test_deny_sends_the_configured_key(self):
+        self.cfg["focus"]["deny_key"] = "C-c"
+        self.arm()
+        self.core.step(now=self.now)
+        self.answer("deny")
+        self.core.step(now=self.now + 1)
+        self.assertEqual(self.sent, ["C-c"])
+
+    def test_stale_token_is_refused(self):
+        self.arm()
+        self.core.step(now=self.now)
+        self.answer("approve", token="sess-1:1:old")
+        self.core.step(now=self.now + 1)
+        self.assertEqual(self.sent, [])
+        r = self.needs()["answer_result"]
+        self.assertFalse(r["ok"])
+        self.assertIn("dialog changed", r["reason"])
+        # a fresh click with the live token still works: nothing was spent
+        self.answer("approve")
+        self.core.step(now=self.now + 2)
+        self.assertEqual(self.sent, ["Enter"])
+
+    def test_a_new_dialog_is_a_new_token(self):
+        self.arm()
+        self.core.step(now=self.now)
+        t1 = self.needs()["answer_token"]
+        # the dialog was answered in the terminal and a new one came up
+        self.q.put(ev("PostToolUse", self.now + 1, self.path))
+        self.arm(at=self.now + 2)
+        self.core.step(now=self.now + 3)
+        t2 = self.needs()["answer_token"]
+        self.assertNotEqual(t1, t2)
+        self.answer("approve", token=t1)         # click aimed at the old one
+        self.core.step(now=self.now + 4)
+        self.assertEqual(self.sent, [])
+
+    def test_elicitation_and_agent_input_are_never_answerable(self):
+        for ntype in ("elicitation_dialog", "elicitation_url_dialog",
+                      "agent_needs_input"):
+            with self.subTest(ntype=ntype):
+                self.sent.clear()
+                self.arm(ntype=ntype)
+                self.core.step(now=self.now)
+                c = self.needs()
+                self.assertEqual(c["lane"], "needs")      # still a wait
+                self.assertFalse(c["can_answer"])
+                self.answer("approve")
+                self.core.step(now=self.now + 1)
+                self.assertEqual(self.sent, [])
+                self.assertIn("not permission", c and self.needs()["answer_result"]["reason"])
 
     def test_silence_guess_is_not_enough(self):
         # transcript tier alone: pending Bash + write silence -> wait, src t
         self.core.step(now=self.now)
-        c = self.core.board_doc["lanes"]["needs"][0]
-        self.assertEqual(c["src"], "t")
-        self.q.put({"_cmd": "answer", "sid": "sess-1", "answer": "approve",
-                    "ts": self.now})
+        c = self.needs()
+        self.assertEqual((c["src"], c["can_answer"]), ("t", False))
+        self.answer("approve", token="sess-1:0:b1")
         self.core.step(now=self.now + 1)
         self.assertEqual(self.sent, [])
+
+    def test_stale_hook_latch_with_a_silence_wait_is_refused(self):
+        # hooks went quiet (> hook_fresh_s): the latch is still set on the
+        # Session but src falls back to the transcript's guess
+        self.arm(at=self.now - 2000)
+        self.core.step(now=self.now)
+        c = self.needs()
+        self.assertEqual(c["src"], "t")
+        self.assertFalse(c["can_answer"])
+        self.answer("approve")
+        self.core.step(now=self.now + 1)
+        self.assertEqual(self.sent, [])
+        self.assertIn("not hook-evidenced", self.needs()["answer_result"]["reason"])
+
+    def test_truncated_pending_text_is_not_approvable(self):
+        write_jsonl(self.path, [
+            human(self.now - 30, "run it"),
+            assistant_tool_use(self.now - 29, "Bash", "b1",
+                               {"command": "echo ok; " * 400 + "rm -rf /"})])
+        self.arm()
+        self.core.step(now=self.now)
+        c = self.needs()
+        self.assertTrue(c["pending_truncated"])
+        self.assertNotIn("rm -rf", c["pending"])
+        self.assertFalse(c["can_answer"])
+        self.answer("approve")
+        self.core.step(now=self.now + 1)
+        self.assertEqual(self.sent, [])
+        self.assertIn("truncated", self.needs()["answer_result"]["reason"])
 
     def test_a_question_is_never_answered_with_enter(self):
         write_jsonl(self.path, [
@@ -348,21 +496,123 @@ class AnswerTest(unittest.TestCase):
                                {"questions": [{"question": "A or B?"}]})])
         self.arm()
         self.core.step(now=self.now)
-        self.assertEqual(self.core.board_doc["lanes"]["needs"][0]["need"],
-                         "question")
-        self.q.put({"_cmd": "answer", "sid": "sess-1", "answer": "approve",
-                    "ts": self.now})
+        c = self.needs()
+        self.assertEqual((c["need"], c["can_answer"]), ("question", False))
+        self.answer("approve")
         self.core.step(now=self.now + 1)
         self.assertEqual(self.sent, [])
 
+    def test_a_failed_send_is_reported_not_raised(self):
+        focus.send_key_session = lambda core, s, key, **kw: (False, "no pane")
+        self.arm()
+        self.core.step(now=self.now)
+        self.answer("approve")
+        self.core.step(now=self.now + 1)           # must not raise
+        r = self.needs()["answer_result"]
+        self.assertEqual((r["ok"], r["reason"]), (False, "no pane"))
+
+
+class StrictBindingTest(unittest.TestCase):
+    """A keystroke needs the exact process: registry entry for this
+    session id, pid alive and not reused, a tty. Never a cwd guess."""
+
+    def core(self, adapter="tmux"):
+        return type("Core", (), {"cfg": {"focus": {"adapter": adapter}}})()
+
+    def ses(self, reg, claude_pid=0, sid="sid-1"):
+        return type("Ses", (), {"session_id": sid, "cwd": "/home/u/p",
+                                "project": "p", "claude_pid": claude_pid,
+                                "reg": reg})()
+
+    def runner(self):
+        return fake_runner({
+            "ps": lambda c: ("ttys012\n" if "tty=" in c
+                             else ("  201 Mon Jul 21 09:00:00 2026 claude "
+                                   "/usr/local/bin/claude\n"), 0),
+            "lsof": "n/home/u/p\n",
+            "tmux": lambda c: ((TMUX_PANES if "list-panes" in c else ""), 0)})
+
+    def test_live_registry_pid_sends_to_its_own_tmux_server(self):
+        run = self.runner()
+        me = os.getpid()
+        reg = {"pid": me, "sessionId": "sid-1", "procStart": "X"}
+        with mock.patch.object(focus, "env_of",
+                               lambda pid, runner=None: {"TMUX": "/tmp/s,1,0"}), \
+                mock.patch.object(focus, "tty_of",
+                                  lambda pid, runner=None: "/dev/pts/7"):
+            ok, detail = focus.send_key_session(
+                self.core(), self.ses(reg), "Enter", runner=run,
+                proc_start=lambda pid: "X")
+        self.assertTrue(ok, detail)
+        self.assertIn(["tmux", "-S", "/tmp/s", "send-keys", "-t", "%5", "Enter"],
+                      run.calls)
+
+    def assert_refused(self, ses, proc_start=lambda pid: "X", why=""):
+        run = self.runner()
+        ok, detail = focus.send_key_session(self.core(), ses, "Enter",
+                                            runner=run, proc_start=proc_start)
+        self.assertFalse(ok)
+        self.assertIn(why, detail)
+        # never fell back to Jump's process hunt
+        self.assertFalse(any(c[0] == "lsof" or (c[0] == "ps" and "-axo" in c)
+                             for c in run.calls), run.calls)
+        self.assertFalse(any("send-keys" in c for c in run.calls))
+        return detail
+
+    def test_no_registry_entry_is_refused_even_with_a_hook_pid(self):
+        self.assert_refused(self.ses(None, claude_pid=os.getpid()),
+                            why="no live registry entry")
+
+    def test_dead_pid_is_refused(self):
+        p = subprocess.Popen(["true"])
+        p.wait()
+        self.assert_refused(self.ses({"pid": p.pid, "sessionId": "sid-1",
+                                      "procStart": ""}), why="gone")
+
+    def test_reused_pid_is_refused(self):
+        reg = {"pid": os.getpid(), "sessionId": "sid-1", "procStart": "X"}
+        self.assert_refused(self.ses(reg), proc_start=lambda pid: "Y",
+                            why="reused")
+
+    def test_unreadable_start_time_is_refused(self):
+        reg = {"pid": os.getpid(), "sessionId": "sid-1", "procStart": "X"}
+        self.assert_refused(self.ses(reg), proc_start=lambda pid: "",
+                            why="unreadable")
+
+    def test_pid_moved_to_another_session_is_refused(self):
+        # /clear: same process, new session id in the registry
+        reg = {"pid": os.getpid(), "sessionId": "sid-NEW", "procStart": "X"}
+        self.assert_refused(self.ses(reg), why="another session")
+
+    def test_hook_ppid_disagreeing_with_the_registry_is_refused(self):
+        reg = {"pid": os.getpid(), "sessionId": "sid-1", "procStart": "X"}
+        self.assert_refused(self.ses(reg, claude_pid=os.getpid() + 1),
+                            why="!= registry pid")
+
+    def test_adapter_exception_is_contained(self):
+        def boom(cmd, timeout=5):
+            raise subprocess.TimeoutExpired(cmd, timeout)
+        reg = {"pid": os.getpid(), "sessionId": "sid-1", "procStart": ""}
+        ok, detail = focus.send_key_session(self.core(), self.ses(reg), "Enter",
+                                            runner=boom,
+                                            proc_start=lambda pid: "")
+        self.assertFalse(ok)
+        self.assertIn("TimeoutExpired", detail)
+
+    def test_run_itself_never_raises(self):
+        r = focus._run(["/nonexistent/binary/for/csb", "x"])
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("FileNotFoundError", r.stderr)
+
 
 class SendKeyTest(unittest.TestCase):
-    def test_tmux_sends_to_the_owning_pane(self):
+    def test_tmux_sends_to_the_owning_pane_on_its_own_server(self):
         run = fake_runner({"tmux": TMUX_PANES})
-        ok, _ = focus.send_tmux(ctx(tty="/dev/pts/7", env={"TMUX": "x"}),
+        ok, _ = focus.send_tmux(ctx(tty="/dev/pts/7", env={"TMUX": "/s.sock,9,0"}),
                                 "Enter", run)
         self.assertTrue(ok)
-        self.assertIn(["tmux", "send-keys", "-t", "side:0.1", "Enter"], run.calls)
+        self.assertIn(["tmux", "-S", "/s.sock", "send-keys", "-t", "%5", "Enter"],
+                      run.calls)
 
     def test_tmux_off_tmux_is_an_honest_no(self):
         run = fake_runner({"tmux": TMUX_PANES})
@@ -394,17 +644,26 @@ class WebRoutesTest(unittest.TestCase):
         self.l.close()
         self.tmp.cleanup()
 
-    def post(self, path, body, origin=True):
+    def post(self, path, body, origin=True, raw=None):
         c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
         h = {"Host": f"127.0.0.1:{self.port}",
              "Content-Type": "application/json"}
         if origin:
             h["Origin"] = f"http://127.0.0.1:{self.port}"
-        c.request("POST", path, body=json.dumps(body).encode(), headers=h)
+        c.request("POST", path, body=raw if raw is not None
+                  else json.dumps(body).encode(), headers=h)
         r = c.getresponse()
         r.read()
         c.close()
         return r.status
+
+    def get(self, path):
+        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        c.request("GET", path, headers={"Host": f"127.0.0.1:{self.port}"})
+        r = c.getresponse()
+        r.read()
+        c.close()
+        return r
 
     def test_mark_validates_and_enqueues(self):
         self.assertEqual(self.post("/api/mark", {"sid": "x", "op": "nuke"}), 400)
@@ -412,27 +671,61 @@ class WebRoutesTest(unittest.TestCase):
         self.assertEqual(self.post("/api/mark", {"sid": "x", "op": "snooze",
                                                  "minutes": 100000}), 400)
         self.assertEqual(self.post("/api/mark", {"sid": "x", "op": "seen",
-                                                 "reply_ts": 12.5}), 202)
+                                                 "reply_ts": T0 + 12.5}), 202)
         cmd = self.l.queue.get(timeout=2)
         self.assertEqual((cmd["_cmd"], cmd["op"], cmd["reply_ts"]),
-                         ("mark", "seen", 12.5))
+                         ("mark", "seen", T0 + 12.5))
         self.assertEqual(self.post("/api/mark", {"sid": "x", "op": "note",
                                                  "text": "n" * 500}), 202)
         self.assertEqual(len(self.l.queue.get(timeout=2)["text"]), 200)
 
-    def test_answer_validates_and_enqueues(self):
-        self.assertEqual(self.post("/api/answer", {"sid": "x", "answer": "yes"}), 400)
-        self.assertEqual(self.post("/api/answer", {"sid": "x", "answer": "deny"}), 202)
-        self.assertEqual(self.l.queue.get(timeout=2)["answer"], "deny")
+    def test_numbers_must_be_finite_plausible_and_not_bool(self):
+        bad = [b'{"sid":"x","op":"seen","reply_ts":1e309}',      # -> inf
+               b'{"sid":"x","op":"seen","reply_ts":true}',
+               b'{"sid":"x","op":"seen","reply_ts":12.5}',       # not an epoch
+               b'{"sid":"x","op":"seen","reply_ts":"1750000000"}',
+               b'{"sid":"x","op":"snooze","minutes":true}',
+               b'{"sid":"x","op":"snooze","minutes":1e309}',
+               b'{"sid":"x","op":"note","text":["a"]}']
+        for raw in bad:
+            with self.subTest(raw=raw):
+                self.assertEqual(self.post("/api/mark", None, raw=raw), 400)
+        self.assertTrue(self.l.queue.empty())
+
+    def test_answer_requires_a_token(self):
+        self.assertEqual(self.post("/api/answer", {"sid": "x", "answer": "yes",
+                                                   "token": "t"}), 400)
+        self.assertEqual(self.post("/api/answer", {"sid": "x", "answer": "deny"}), 400)
+        self.assertEqual(self.post("/api/answer", {"sid": "x", "answer": "deny",
+                                                   "token": ""}), 400)
+        self.assertEqual(self.post("/api/answer", {"sid": "x", "answer": "deny",
+                                                   "token": "x" * 500}), 400)
+        self.assertEqual(self.post("/api/answer", {"sid": "x", "answer": "deny",
+                                                   "token": "x:1:b1"}), 202)
+        cmd = self.l.queue.get(timeout=2)
+        self.assertEqual((cmd["answer"], cmd["token"]), ("deny", "x:1:b1"))
 
     def test_same_origin_rules_apply_to_new_routes(self):
         c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
-        c.request("POST", "/api/answer", body=b'{"sid":"x","answer":"approve"}',
+        c.request("POST", "/api/answer",
+                  body=b'{"sid":"x","answer":"approve","token":"t"}',
                   headers={"Host": f"127.0.0.1:{self.port}",
                            "Content-Type": "application/json",
                            "Origin": "https://evil.example"})
         self.assertEqual(c.getresponse().status, 403)
         c.close()
+
+    def test_board_page_cannot_be_framed(self):
+        for path in ("/", "/api/board"):
+            r = self.get(path)
+            self.assertEqual(r.getheader("Content-Security-Policy"),
+                             "frame-ancestors 'none'", path)
+            self.assertEqual(r.getheader("X-Frame-Options"), "DENY", path)
+
+    def test_board_feed_refuses_non_finite_numbers(self):
+        from csb.web import BoardFeed
+        with self.assertRaises(ValueError):
+            BoardFeed().publish({"ts": float("inf")})
 
 
 if __name__ == "__main__":

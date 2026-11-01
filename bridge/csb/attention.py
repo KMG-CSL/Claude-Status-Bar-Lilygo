@@ -82,6 +82,8 @@ def activity_ts(session):
 
 
 def need_kind(session, r):
+    """What the Needs-you card SAYS it is waiting for (display only —
+    answerable() is the authorization check, never this)."""
     if r.err:
         return "error"
     if r.tl in ("ExitPlanMode",):
@@ -90,7 +92,55 @@ def need_kind(session, r):
             not r.tl and session.last_assistant_text.rstrip().endswith("?")
             and session.perm_prompt_at is None):
         return "question"
+    kind = getattr(session, "perm_kind", "")
+    if session.perm_prompt_at is not None and kind in ("plan", "question"):
+        return kind
     return "permission"
+
+
+def answer_token(session):
+    """Identity of the dialog currently on screen, or "". The board echoes
+    it with Approve/Deny so an answer can only ever land on the dialog
+    the user saw: a new prompt (new latch ts) or a new pending tool_use
+    makes a new token, and core refuses a mismatch."""
+    p = session.perm_prompt_at
+    if p is None:
+        return ""
+    ids = session.pending_ids
+    tid = max(ids, key=lambda k: ids[k][1]) if ids else "-"
+    return f"{session.session_id}:{int(p * 1000)}:{tid}"
+
+
+def answerable(session, r):
+    """-> (ok, reason). THE predicate for Approve/Deny — the card's
+    buttons and core._answer both ask it, so what is offered and what is
+    sent can never disagree. A permission dialog, evidenced by a hook
+    (the Notification latch, kind "permission", hook-fresh so src is
+    "h"), not a plan / question / elicitation / error / rate limit, with
+    its full text on the card, and not already answered from the board."""
+    if r.st != "wait":
+        return False, f"not waiting (st={r.st})"
+    if r.lim:
+        return False, "rate-limited"
+    if r.err:
+        return False, "error wait"
+    if session.perm_prompt_at is None:
+        return False, "no dialog latch"
+    if r.src != "h":
+        return False, f"not hook-evidenced (src={r.src})"
+    kind = getattr(session, "perm_kind", "")
+    if kind != "permission":
+        return False, f"dialog kind is {kind or 'unknown'}, not permission"
+    nk = need_kind(session, r)
+    if nk != "permission":
+        return False, f"card shows a {nk}"
+    pend = _newest_pending(session)
+    if pend and pend.get("truncated"):
+        return False, "pending text truncated — review in the terminal"
+    tok = answer_token(session)
+    if tok and tok == getattr(session, "answered_token", ""):
+        return False, "this dialog was already answered from the board"
+    return True, ""
 
 
 def lane_of(session, r, cfg, now):
@@ -151,12 +201,22 @@ def split_traffic(session, live):
     return peers, traffic
 
 
+def _bound(session):
+    from .focus import bound_pid      # local: focus imports subprocess
+    return bound_pid(session)[0] is not None
+
+
 def card(session, r, entry, lane, cfg, now, live=None, jump=False):
     reg = session.reg or {}
     subs = [{"type": t or "agent", "age": int(now - t0)}
             for t, t0 in session.subagents.values()]
     peers, traffic = split_traffic(session, live)
     pend = _newest_pending(session) if lane == "needs" else None
+    # offered only when the bridge would also send: answerable, an
+    # adapter that can act (jump), and the exact process binding a
+    # keystroke demands (focus.bound_pid — Jump alone may be a guess)
+    can_answer = (lane == "needs" and jump and answerable(session, r)[0]
+                  and _bound(session))
     todos = getattr(session, "todos", [])
     done_n = sum(1 for _c, st in todos if st == "completed")
     seen_ts = getattr(session, "seen_ts", 0) or 0
@@ -206,7 +266,13 @@ def card(session, r, entry, lane, cfg, now, live=None, jump=False):
                       for w, t, x in getattr(session, "exchanges", [])],
         "pending": pend["text"] if pend else "",
         "pending_tool": pend["tool"] if pend else "",
+        "pending_truncated": bool(pend and pend.get("truncated")),
         "options": list(pend["options"]) if pend else [],
+        # Approve/Deny: offered only when answerable() AND the strict
+        # terminal binding holds (jump); the token names THIS dialog
+        "can_answer": bool(can_answer),
+        "answer_token": answer_token(session) if lane == "needs" else "",
+        "answer_result": getattr(session, "answer_result", None),
         "snooze": int(session.snooze_until) if (
             lane == "needs" and is_snoozed(session, now)) else 0,
         "note": getattr(session, "note", ""),

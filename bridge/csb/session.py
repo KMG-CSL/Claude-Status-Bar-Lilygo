@@ -40,8 +40,14 @@ NOISE_TYPES = frozenset((
 # front of the user, and the ones that close one. Everything else
 # (idle_prompt nag, auth_success, agent_completed, quota_*, plugin) is
 # ignored — none of them is something the user must answer.
-NOTIFY_WAIT = frozenset(("permission_prompt", "elicitation_dialog",
-                         "elicitation_url_dialog", "agent_needs_input"))
+# notification type -> what KIND of dialog the latch stands for. Only
+# "permission" may ever be answered from the board (attention.answerable):
+# Enter on an MCP elicitation form or an agent's free-text prompt is not
+# an approval.
+NOTIFY_WAIT = {"permission_prompt": "permission",
+               "elicitation_dialog": "elicitation",
+               "elicitation_url_dialog": "elicitation",
+               "agent_needs_input": "agent_input"}
 NOTIFY_CLEAR = frozenset(("elicitation_complete", "elicitation_response"))
 
 # hook-tracked subagents are dropped after this long without a
@@ -52,7 +58,8 @@ SUBAGENT_HOOK_TTL_S = 3 * 3600
 PROMPT_MAX = 600
 REPLY_MAX = 1200
 EXCHANGE_MAX = 400       # per entry in the "last exchanges" drawer list
-PENDING_MAX = 400        # full text of the call awaiting approval
+PENDING_MAX = 2000       # full text of the call awaiting approval
+                         # (longer is cut AND flagged: never Approve blind)
 EDIT_TOOLS = frozenset(("Edit", "Write", "MultiEdit", "NotebookEdit"))
 
 
@@ -70,12 +77,15 @@ def _pending_text(name, inp):
     """Full "what is this call" for the board card (the LCD gets
     tool_detail's 36 chars): Bash shows the whole command, file tools
     the path, a question its text plus the option labels."""
-    out = {"tool": str(name or "Tool"), "text": "", "options": []}
+    out = {"tool": str(name or "Tool"), "text": "", "options": [],
+           "truncated": False}
     if not isinstance(inp, dict):
         return out
     qs = inp.get("questions")
     if isinstance(qs, list) and qs and isinstance(qs[0], dict):
-        out["text"] = _one_line(str(qs[0].get("question") or ""), PENDING_MAX)
+        q = str(qs[0].get("question") or "")
+        out["text"] = _one_line(q, PENDING_MAX)
+        out["truncated"] = len(" ".join(q.split())) > PENDING_MAX
         opts = qs[0].get("options")
         if isinstance(opts, list):
             out["options"] = [
@@ -87,8 +97,9 @@ def _pending_text(name, inp):
         v = inp.get(key)
         if isinstance(v, str) and v.strip():
             # a command keeps its line breaks (shown in a <pre>)
-            out["text"] = (v.strip() if key == "command"
-                           else _one_line(v, PENDING_MAX))[:PENDING_MAX]
+            full = v.strip() if key == "command" else " ".join(v.split())
+            out["text"] = full[:PENDING_MAX]
+            out["truncated"] = len(full) > PENDING_MAX
             return out
     return out
 
@@ -181,6 +192,12 @@ class Session:
         self.turn_started_at = None   # UserPromptSubmit edge
         self.turn_stopped_at = None   # Stop edge
         self.perm_prompt_at = None    # armed latch: perm dialog / plan / question
+        self.perm_kind = ""           # what armed it: permission / plan /
+                                      # question / elicitation / agent_input
+        # board Approve/Deny: the dialog token already answered (one send
+        # per dialog), and the outcome of the last attempt for the card
+        self.answered_token = ""
+        self.answer_result = None     # {"token","answer","ok","reason","ts"}
         self.session_started_at = None
         self.session_ended_at = None
         self.first_seen = time.time()
@@ -511,10 +528,13 @@ class Session:
             # here so a user-widened matcher can't arm the latch spuriously
             if ev.get("tool_name") in ("ExitPlanMode", "AskUserQuestion"):
                 self.perm_prompt_at = ts
+                self.perm_kind = ("plan" if ev["tool_name"] == "ExitPlanMode"
+                                  else "question")
         elif name == "Notification" and ev.get("notification_type"):
             ntype = ev["notification_type"]
             if ntype in NOTIFY_WAIT:
                 self.perm_prompt_at = ts
+                self.perm_kind = NOTIFY_WAIT[ntype]
             elif ntype in NOTIFY_CLEAR:
                 self.perm_prompt_at = None
         elif name == "Notification":
@@ -529,6 +549,7 @@ class Session:
             msg = (ev.get("message") or "").lower()
             if "waiting for your input" not in msg:
                 self.perm_prompt_at = ts
+                self.perm_kind = "permission"
         elif name == "PostToolUse":
             self.perm_prompt_at = None   # the prompted tool ran -> approved
         elif name == "SubagentStart":

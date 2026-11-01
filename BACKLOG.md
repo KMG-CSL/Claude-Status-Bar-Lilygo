@@ -15,9 +15,19 @@ Rough priority order. Items graduate to upstream PRs once proven on real hardwar
   (the LCD cell keeps breathing; dropping `at` for a snoozed session is
   one line in `to_packet` if wanted); Approve/Deny keystrokes verified
   by unit test only — confirm Enter/Escape against a live permission
-  dialog in iTerm2 and tmux once, then note the Claude Code version here;
-  typed free-text answers from the board (same send path) deferred until
-  Approve has proven itself.
+  dialog in iTerm2 and tmux once, then note the Claude Code version here
+  (and whether `1` selects Yes directly; if so make it the default
+  `approve_key`); typed free-text answers from the board (same send
+  path) deferred until Approve has proven itself.
+- **Approve via `PermissionRequest` hook** instead of keystroke
+  injection: the hook answers allow/deny straight to Claude Code, which
+  closes the residual the 2026-11-01 review named (an approval made in
+  the terminal leaves the latch/token valid for the tool's whole runtime,
+  so a board click then types Enter into a running session). Trade-off:
+  the hook must block while the board user decides, delaying the
+  terminal dialog — needs a timeout that falls back to the normal
+  dialog. Design, don't build, until keystroke Approve has been used in
+  anger for a while.
 - **Registry status vocabulary**: only `idle`/`busy` and a null
   `waitingFor` have been observed. The tier treats any non-null
   `waitingFor` (or `status == "waiting"`) as a dialog; confirm the real
